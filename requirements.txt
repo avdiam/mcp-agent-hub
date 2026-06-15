@@ -4,6 +4,10 @@
 # yourself: fastmcp 3.4.1 floors starlette>=1.0.1 (CVE-2026-48710) and a
 # self-pinned older line would conflict. Run `pip freeze` after install to lock
 # exact patch versions.
+#
+# Note: fastmcp 3.x is a meta-package (uv workspace: fastmcp-slim + fastmcp-remote);
+# the importable `fastmcp` namespace (incl. FastMCP) ships in fastmcp-slim. A plain
+# `pip install fastmcp` pulls both. Verified against the 3.4.2 source, 2026-06-15.
 
 fastmcp>=3.4,<4          # standalone FastMCP 3.x; Streamable HTTP + http_app() mount
 fastapi>=0.124,<0.125    # web framework hosting the dashboard + /api/state

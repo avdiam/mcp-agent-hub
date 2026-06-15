@@ -18,45 +18,53 @@ This plan outlines the steps required to build the MCP Agent Hub in a future ses
    ```
 
 ## Step 2: Database Layer (`db.py`)
-1. `init_db()`: create the `agents` and `messages` tables if absent; set `PRAGMA journal_mode=WAL`; create an index on `messages(recipient_id, status)`.
-2. Connection helper: short-lived connections with `check_same_thread=False`, invoked off the event loop via `run_in_threadpool` (or use `aiosqlite`).
-3. Registry helpers: `upsert_agent(id, capabilities_json)`, `get_all_agents()`, `set_agent_offline(id)`, `touch_last_seen(id)`.
+1. `init_db()`: create the `agents` and `messages` tables if absent; set `PRAGMA journal_mode=WAL` (+ borrow `synchronous=NORMAL` / `busy_timeout` from MCP Agent Mail — see Prior Art); create indexes on `messages(recipient_id, status)` and `messages(session_id)`.
+   * `agents`: `id` PK, `description` (TEXT, nullable), `skills` (TEXT/JSON), `status`, `last_seen`.
+   * `messages`: `id` PK, `session_id`, `parent_id` (nullable), `kind` (`task`|`input_request`, default `task`), `sender_id`, `recipient_id`, `payload`, `context`, `response`, `status` (`pending`|`in_progress`|`input_required`|`completed`|`failed`), `flagged_stale` (INT default 0), `claimed_at`, `created_at`, `updated_at`.
+2. Connection helper: short-lived connections with `check_same_thread=False`, invoked off the event loop via `run_in_threadpool` (or use `aiosqlite`); a lightweight retry-on-`database is locked` with backoff (borrowed from Agent Mail).
+3. Registry helpers: `upsert_agent(id, skills_json, description)`, `get_all_agents()`, `set_agent_offline(id)`, `touch_last_seen(id)`.
 4. Message helpers:
-   * `enqueue_message(...)`
-   * `claim_pending(agent_id)` — atomic `UPDATE ... SET status='in_progress', claimed_at=now ... RETURNING *` (no read-then-write race).
-   * `complete_message(id, response)`, `fail_message(id, error)`, `get_status(id)`.
-   * `reclaim_stale(visibility_timeout)` — revert unacked `in_progress` rows to `pending`.
-5. Store `capabilities` via `json.dumps`; parse with `json.loads` on read.
+   * `enqueue_message(...)` — mints/accepts `session_id`, sets optional `parent_id`/`kind`, sets `flagged_stale` when the recipient is stale (D6/Q8).
+   * `claim_pending(agent_id)` — atomic `UPDATE ... SET status='in_progress', claimed_at=now ... RETURNING *` (no read-then-write race). Claims `pending` rows (incl. `kind='input_request'`) **and** stale `in_progress` rows; **excludes parked `input_required` rows**.
+   * `request_input(message_id, question)` — park the task `→ input_required` and `enqueue_message` the child `input_request` back to the original sender (D17).
+   * `complete_message(id, response)` — mark `completed`; **un-park rule:** if the row is an `input_request`, flip its `parent_id` task `input_required → pending`, clear its `claimed_at`, and append the answer to the parent's `context` (D17).
+   * `fail_message(id, error)`, `get_status(id)` (surface the pending `question` when `input_required`).
+   * `reclaim_stale(visibility_timeout)` — revert unacked `in_progress` rows to `pending` (never `input_required`).
+5. Store `skills` via `json.dumps`; parse with `json.loads` on read.
 
 ## Step 3: Web Dashboard (`templates/index.html` & `hub.py`)
 1. In `hub.py`, initialize `app = FastAPI(lifespan=...)` (lifespan wired to the MCP app — see Step 4).
 2. Configure Jinja2 templates.
 3. Create the `/` route to serve `index.html`.
 4. Create an `/api/state` route returning `{agents: get_all_agents(), messages: recent(limit=DASHBOARD_MESSAGE_LIMIT)}`, deriving online/stale/offline from `last_seen` + status.
-5. In `index.html`, fetch `/api/state` every 2 seconds and update the HTML tables. Use CDN Tailwind for styling, status badges (incl. `Failed`), and a payload/response modal.
+5. In `index.html`, fetch `/api/state` every 2 seconds and update the HTML tables. Use CDN Tailwind for styling, status badges (incl. **`Input Required`** and `Failed`), a **⚠ stale-recipient** flag on `flagged_stale` messages, per-agent **skills** (name + tags, full detail on expand), `session_id` thread grouping, and a payload/response/question modal.
 
 ## Step 4: The FastMCP Server (`hub.py`)
 1. Initialize `mcp = FastMCP("Agent Broker")`.
 2. Add one cross-cutting middleware via `mcp.add_middleware(...)` whose `on_call_tool` hook refreshes `last_seen` (from the call's `agent_id` arg) and writes a structured event log row for the dashboard — so the 8 tool bodies stay focused (see `design-decisions.md`, D14).
-3. Implement the `@mcp.tool()` decorators mapping to the `db.py` functions (8 tools):
-   * `register_agent()`
-   * `list_agents()`
-   * `send_message()` — validates the recipient (reject unknown / explicitly-disconnected; queue to known-but-stale)
-   * `check_inbox()` — atomic claim + optional long-poll (`wait`/`timeout`)
-   * `reply_to_message()`
+3. Implement the `@mcp.tool()` decorators mapping to the `db.py` functions (**9 tools**):
+   * `register_agent(agent_id, skills, description=None)` — structured Agent-Card `skills[]` (D16)
+   * `list_agents()` — returns `{agent_id, description, skills, status, last_seen}`
+   * `send_message(sender_id, recipient_id, payload, context=None, session_id=None)` → `{message_id, session_id}` — records `sender_id` (needed for `check_status` + D17 routing); validates the recipient (reject unknown / explicitly-disconnected; queue to known-but-stale **with `flagged_stale`**, D6/Q8)
+   * `check_inbox()` — atomic claim + optional long-poll (`wait`/`timeout`); returns `session_id`/`parent_id`/`kind` per message
+   * `reply_to_message()` — completes; **un-parks** the parent task when the replied row is an `input_request` (D17)
    * `fail_message()`
-   * `check_status()`
+   * `request_input(message_id, question)` → `{request_message_id, session_id}` — park + ask (D17)
+   * `check_status()` — surfaces the pending `question` when `input_required`
    * `disconnect_agent()`
-4. Mount the MCP ASGI app at `/mcp` via `mcp_app = mcp.http_app(path="/mcp")`, then `app = FastAPI(lifespan=combine_lifespans(hub_lifespan, mcp_app.lifespan))` and `app.mount("/mcp", mcp_app)`. Forwarding the MCP lifespan is **mandatory** (else "task group is not initialized"). Bind to `127.0.0.1`.
+4. Mount the MCP ASGI app at `/mcp` via `mcp_app = mcp.http_app(path="/mcp")`, then `app = FastAPI(lifespan=combine_lifespans(hub_lifespan, mcp_app.lifespan))` and `app.mount("/mcp", mcp_app)`. Forwarding the MCP lifespan is **mandatory** (else "task group is not initialized"). Bind to `127.0.0.1`, **and add `Origin`-header validation** (allow missing/localhost, reject foreign origins) as a small ASGI/Starlette middleware — the spec-mandated DNS-rebinding defense (D18).
 5. Enforce the visibility timeout **lazily in the claim query** (the claim also grabs `in_progress` rows older than `VISIBILITY_TIMEOUT`); optionally start a small `asyncio` reclaim loop in `hub_lifespan` as a backstop (see `design-decisions.md`, D15).
 
 ## Step 5: Automated Tests (`tests/`)
 1. DB unit tests:
    * atomic claim under concurrency (no double-delivery),
    * visibility-timeout redelivery of crashed/unacked messages,
-   * `capabilities` JSON round-trip,
-   * offline (explicit disconnect) vs stale (missed heartbeat) behavior.
-2. A scripted MCP client smoke test: `register → send → check_inbox → reply → check_status`. Use the MCP Inspector CLI against the running server, e.g. `npx @modelcontextprotocol/inspector --cli http://localhost:8000/mcp --transport http --method tools/list` (and `--method tools/call --tool-name ...`), wired into the test flow.
+   * `skills` JSON round-trip,
+   * offline (explicit disconnect) vs stale (missed heartbeat) behavior,
+   * **`input_required` round-trip** (D17): `request_input` parks the task + enqueues the child; the parked row is **excluded** from `claim_pending`/`reclaim_stale`; replying to the child **un-parks** the parent to `pending` with the answer in `context`,
+   * **`flagged_stale`** set on a send to a stale recipient (D6/Q8).
+2. A scripted MCP client smoke test: `register → send → check_inbox → request_input → (sender) check_inbox → reply → (worker) check_inbox → reply → check_status`. Use the MCP Inspector CLI against the running server, e.g. `npx @modelcontextprotocol/inspector --cli http://localhost:8000/mcp --transport http --method tools/list` (and `--method tools/call --tool-name ...`), wired into the test flow.
+3. An `Origin`-validation check: a request with a foreign `Origin` header is rejected; one with no `Origin` (or a localhost `Origin`) passes (D18).
 
 ## Step 6: End-to-End Testing
 1. Run the server: `uvicorn hub:app --port 8000 --host 127.0.0.1`.

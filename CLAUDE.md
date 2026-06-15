@@ -18,7 +18,7 @@ Messages are persisted in SQLite so work survives restarts.
 There is **no code yet** — only design docs. They are the source of truth; read them before writing code:
 
 - `project-purpose.md` — the problem and goals.
-- `specs.md` — system components, the 8 MCP tools, dashboard, and storage schema.
+- `specs.md` — system components, the 9 MCP tools, dashboard, and storage schema.
 - `architecture.md` — components, transport, and trust model.
 - `plan.md` — the step-by-step build plan.
 - `design-decisions.md` — the decision log, tunable constants, and **open questions still awaiting sign-off** (delivery model, send-to-stale policy, constants). Check this before making design changes.
@@ -73,7 +73,7 @@ pytest
 - **Transport is Streamable HTTP** at `/mcp`. Do not reintroduce the legacy `/sse` + `/messages` transport.
 - **All SQLite access goes through `db.py`**, runs in WAL mode, and stays off the event loop (`run_in_threadpool` or `aiosqlite`).
 - **Delivery is at-least-once**: `check_inbox` claims atomically; an unacked `in_progress` message is redelivered after `VISIBILITY_TIMEOUT`. Handlers must tolerate a rare duplicate.
-- **Store `capabilities` as JSON text** (SQLite has no array type).
+- **Store `skills` as JSON text** (the structured Agent-Card capability descriptor; SQLite has no array/object type).
 - **Trust model:** single-user, localhost, no auth — bind `127.0.0.1` only.
 - When changing the design, update the relevant doc(s) and the decision log in `design-decisions.md` in the same change.
 
