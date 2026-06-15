@@ -21,7 +21,7 @@ There is **no code yet** — only design docs. They are the source of truth; rea
 - `specs.md` — system components, the 9 MCP tools, dashboard, and storage schema.
 - `architecture.md` — components, transport, and trust model.
 - `plan.md` — the step-by-step build plan.
-- `design-decisions.md` — the decision log (D1–D19), tunable constants, and any open questions. Check this before making design changes. *(As of 2026-06-15, all open questions Q1–Q9 are resolved.)*
+- `design-decisions.md` — the decision log (D1–D25), tunable constants, and any open questions. Check this before making design changes. *(As of 2026-06-15, Q1–Q9 and the D20–D25 implementation-review decisions are all locked.)*
 
 ## Session continuity — read these FIRST every session
 
@@ -72,8 +72,8 @@ pytest
 ## Conventions
 
 - **Transport is Streamable HTTP** at `/mcp`. Do not reintroduce the legacy `/sse` + `/messages` transport.
-- **All SQLite access goes through `db.py`**, runs in WAL mode, and stays off the event loop (`run_in_threadpool` or `aiosqlite`).
-- **Delivery is at-least-once**: `check_inbox` claims atomically; an unacked `in_progress` message is redelivered after `VISIBILITY_TIMEOUT`. Handlers must tolerate a rare duplicate. A `pending` message unclaimed past `MESSAGE_TTL` is swept to a terminal `expired` state (D6/Q3).
+- **All SQLite access goes through `db.py`**, runs in WAL mode, and stays off the event loop via **`aiosqlite`** (D21 — so the long-poll is an async-poll, never a blocking threadpool hold).
+- **Delivery is at-least-once**: `check_inbox` claims atomically; an unacked `in_progress` message is redelivered after `VISIBILITY_TIMEOUT`. Handlers must tolerate a rare duplicate. A `pending` **`task`** unclaimed past `MESSAGE_TTL` is swept to a terminal `expired` state (D6/Q3/D24). Completing a `task` fans a **`kind="result"`** message back to the sender's inbox (D20); `check_status` is the durable/secondary read.
 - **The hook layer peeks, never claims (D19):** the optional `hook_peek.py` hits the read-only `/api/peek` endpoint only to *nudge* an agent to call `check_inbox`. Never let a hook mutate message state or open `hub.db` directly — delivery + ack stay in the MCP `check_inbox`→`reply`/`fail` path.
 - **Store `skills` as JSON text** (the structured Agent-Card capability descriptor; SQLite has no array/object type).
 - **Trust model:** single-user, localhost, no auth — bind `127.0.0.1` only.

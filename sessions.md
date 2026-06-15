@@ -2,6 +2,26 @@
 
 > Append-only log of what was accomplished each session. Pairs with `tasks.md` (what's left). This project travels between two PCs and uses **no local Claude memories** — this file is the durable record. Newest session first.
 
+## 2026-06-15 — Pre-build implementation review (12 findings) → D20–D25 locked, docs reconciled
+
+Did a full review/check of every design doc (one-by-one and as a whole) before writing code. Still pre-implementation; no app code. Surfaced **12 findings**; the user signed off on all six real decisions plus the adopt-list, and everything was folded into the docs in one pass.
+
+**Decisions locked (→ D20–D25):**
+- **D20 — Result-to-inbox (1A).** Completing a `task` now enqueues a derived `kind="result"` message (carrying the response) to the original sender's inbox, delivered via their `check_inbox` long-poll and auto-completed on claim (best-effort, no ack); `check_status` downgraded to the durable/secondary read. Fixes the one real asymmetry — the *requester* was spin-polling `check_status` for results (the exact postal-mcp failure we criticize) — and lets the D19 hook nudge cover results too.
+- **D21 — Long-poll = async-poll (3A).** `check_inbox(wait)` is an async coroutine polling every `LONGPOLL_INTERVAL` (~1s) via `aiosqlite` between `asyncio.sleep`s — never a blocking threadpool hold (which would starve the pool under N waiters). Committed to `aiosqlite`. `wait=True` is the default. Condition-notify → v2.
+- **D22 — Activity feed = in-memory ring buffer (4C).** D14 promised a per-call event stream "the dashboard can surface" with no backing table/panel/endpoint. Resolved as a last-~200 in-memory ring buffer surfaced on `/api/state` + an Activity panel; not persisted. Persisted events table → v2.
+- **D23 — `last_seen` from the direct actor arg only (5B).** D14 over-claimed "refresh on every call from the `agent_id` arg" — but only 3 tools carry `agent_id`, `send_message` uses `sender_id`, four are `message_id`-only, and `list_agents` has no caller identity. Refresh from `agent_id`/`sender_id` where present; skip the rest. Uniform `caller_id` → v2 with auth.
+- **D24 — TTL sweep targets `pending kind='task'` only (2A).** The child `input_request` (a `pending` row) could be TTL-expired while its parked `input_required` parent stays protected — stranding the parent forever. Excluded `input_request`/`result` derived messages from the sweep. Cascade-expire → v2.
+- **D25 — Phased walking-skeleton build (6A).** P1 core 7 tools + green cross-client haiku E2E → P2 D16/D17/D20 → P3 D6/D18 → P4 D19; structural columns ship in P1 so enrichment adds behaviour, not migrations.
+
+**Reconciliations (doc inconsistencies fixed):** 9-tool count (D14 + plan said "8"); `check_inbox` default `wait=True` (the spec signature said `False`, contradicting D2); D14 wording (identity + logging); + adopts: SQLite ≥3.35 assert for `UPDATE…RETURNING`, Pydantic `Skill` model (advertised in `tools/list`), `created_at` index, in-memory `fastmcp.Client` test split (+`httpx` dev dep), no-ownership-check trust-model note, and **tool docstrings as a first-class deliverable** (they're the agents' real UX).
+
+**Tooling embedded in the plan (user-approved):** Context7 (re-verify FastMCP 3.x/FastAPI at build — these postdate the assistant's training cutoff), `mcp-server-dev` (scaffold), `frontend-design` (dashboard), `/code-review` (each phase diff), `/security-review` (after P3), `/run` + `/verify` (Step 6 E2E). Note: the `claude-api` skill is **not** needed — the hub brokers messages between Claude Code instances; it never calls an LLM.
+
+**Files changed (design-only):** `design-decisions.md` (+D20–D25; D6/D7/D14/D16 updated; +`LONGPOLL_INTERVAL`; Dev-Tooling block expanded), `specs.md` (state machine + result delivery; `wait=True` default; tools #1/#4/#5/#8; dashboard Activity panel + `kind`; schema `result` kind + `created_at` index; §6 constant), `architecture.md` (§1a middleware D22/D23; §2 db.py `complete_message`/`claim_pending`/`expire_messages`; §4 Activity panel + frontend-design; §5 async-poll; §6 no-ownership note), `plan.md` (Build-phasing block; Steps 1–6 + tooling callouts), `requirements.txt` (+`httpx`), `tasks.md` (D20–D25 section; Implementation steps re-phased; v2 list), `sessions.md` (this entry).
+
+**Still open:** nothing on design — Q1–Q9 + D20–D25 all locked. Implementation (P1–P4 / Steps 1–6) not started. Residual: `pip freeze` + Context7 API re-verify at first install.
+
 ## 2026-06-15 — Last 3 open questions RESOLVED; hook peek/nudge layer added (D19)
 
 Reviewed the three remaining open questions (Q1/Q3/Q5) with the user and **locked all of them** — design is now fully signed off (Q1–Q9 all resolved). Still pre-implementation; no app code. The session's headline was a user-raised idea that became a real design addition.
