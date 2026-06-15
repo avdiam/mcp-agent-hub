@@ -2,6 +2,22 @@
 
 > Append-only log of what was accomplished each session. Pairs with `tasks.md` (what's left). This project travels between two PCs and uses **no local Claude memories** — this file is the durable record. Newest session first.
 
+## 2026-06-15 — Live web verification of post-cutoff deps (FastMCP / FastAPI / CVE) + FastAPI pin fix
+
+Re-verified the post-training-cutoff facts the docs assert (assistant cutoff is Jan 2026; docs are dated June 2026) against **primary sources** via web search/fetch — PyPI metadata, the official gofastmcp docs, and the CVE record — then applied the one config correction it surfaced.
+
+**Confirmed true:**
+- **FastMCP 3.4.2** (June 6 2026), `requires-python >=3.10`. Meta-package resolves `fastmcp-slim[client,server]==3.4.2` — **not** a hard `fastmcp-remote` dep (corrected the docs' overstated split). `from fastmcp import FastMCP` holds.
+- **FastMCP API** (gofastmcp docs): `http_app(path=…)` + `app.mount("/mcp", mcp_app)`, `combine_lifespans` from `fastmcp.utilities.lifespan` used as `FastAPI(lifespan=combine_lifespans(app_lifespan, mcp_app.lifespan))`, `add_middleware` + `Middleware.on_call_tool` ("earlier middleware runs first"), in-memory `async with Client(mcp)` testing — all current. D13/D14/D21/D22 + the test-split all hold.
+- **CVE-2026-48710 ("BadHost")** real: HIGH, Starlette Host-header auth-bypass, all versions <1.0.1, fixed in 1.0.1; explicitly names MCP servers / agent harnesses. **Nuance:** it's a *Host*-header bug, distinct from our D18 *Origin* validation — the real mitigation is Starlette ≥1.0.1, which `fastmcp-slim` floors (verified). Our "don't self-pin starlette" strategy is correct.
+- **Transitive floors:** `fastmcp-slim` → `starlette>=1.0.1`, `uvicorn>=0.35`, `mcp>=1.24,<2`.
+
+**Found stale + fixed:** FastAPI — `0.124.x` shipped Dec 2025 but current is **0.137.1 (June 15 2026)**; our `fastapi>=0.124,<0.125` pin locked a 6-month-old release. **Applied:** `fastapi>=0.135,<0.138` (0.x can break on minors → tight ceiling), `uvicorn[standard]>=0.34 → >=0.35` (match the fastmcp floor), and corrected the `requirements.txt` + `design-decisions.md` `fastmcp-remote` note. **No design decision (D1–D25) invalidated.**
+
+**Files changed:** `requirements.txt` (FastAPI pin, uvicorn floor, comment), `design-decisions.md` (Pre-build API Verification: live re-verification note + residual narrowed + fastmcp-remote correction), `tasks.md` (residual ticked to install-time `pip freeze` only), `sessions.md` (this entry).
+
+**Still open:** nothing on design; implementation (P1–P4) not started. **Residual: just `pip freeze` at first install** to lock exact patch versions — API + deps now confirmed live.
+
 ## 2026-06-15 — Pre-build implementation review (12 findings) → D20–D25 locked, docs reconciled
 
 Did a full review/check of every design doc (one-by-one and as a whole) before writing code. Still pre-implementation; no app code. Surfaced **12 findings**; the user signed off on all six real decisions plus the adopt-list, and everything was folded into the docs in one pass.

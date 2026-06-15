@@ -1,17 +1,19 @@
 # MCP Agent Hub — pinned dependencies (see design-decisions.md, D13)
 #
 # Let fastmcp resolve starlette/uvicorn/mcp transitively — do NOT pin starlette
-# yourself: fastmcp 3.4.1 floors starlette>=1.0.1 (CVE-2026-48710) and a
-# self-pinned older line would conflict. Run `pip freeze` after install to lock
-# exact patch versions.
+# yourself: fastmcp-slim floors starlette>=1.0.1 (the CVE-2026-48710 "BadHost"
+# Host-header fix) and a self-pinned older line would conflict. Run `pip freeze`
+# after install to lock exact patch versions.
 #
-# Note: fastmcp 3.x is a meta-package (uv workspace: fastmcp-slim + fastmcp-remote);
-# the importable `fastmcp` namespace (incl. FastMCP) ships in fastmcp-slim. A plain
-# `pip install fastmcp` pulls both. Verified against the 3.4.2 source, 2026-06-15.
+# Note: fastmcp 3.x is a meta-package; `pip install fastmcp` resolves
+# `fastmcp-slim[client,server]` (which carries the importable `fastmcp` namespace
+# incl. FastMCP) — NOT a separate `fastmcp-remote`. Verified live against PyPI
+# metadata + gofastmcp docs, 2026-06-15: fastmcp 3.4.2; fastmcp-slim floors
+# starlette>=1.0.1 / uvicorn>=0.35 / mcp>=1.24,<2.
 
 fastmcp>=3.4,<4          # standalone FastMCP 3.x; Streamable HTTP + http_app() mount
-fastapi>=0.124,<0.125    # web framework hosting the dashboard + /api/state
-uvicorn[standard]>=0.34  # ASGI server ([standard] pulls uvloop/httptools)
+fastapi>=0.135,<0.138    # dashboard + /api/state (0.137.1 latest 2026-06-15; 0.x can break on minors → tight pin)
+uvicorn[standard]>=0.35  # ASGI server ([standard] pulls uvloop/httptools); matches fastmcp-slim[server] floor
 aiosqlite>=0.21          # async SQLite off the event loop (WAL + UPDATE...RETURNING)
 jinja2>=3.1.4            # dashboard templates (>=3.1.4 clears prior CVEs)
 pydantic>=2.11,<3        # transitive via fastmcp/fastapi; guard against a v3 major
