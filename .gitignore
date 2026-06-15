@@ -1,0 +1,17 @@
+# Python
+venv/
+.venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+
+# App runtime
+hub.db
+hub.db-wal
+hub.db-shm
+
+# Local tooling / OS
+.env
+.DS_Store
+Thumbs.db
