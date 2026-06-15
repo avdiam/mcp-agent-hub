@@ -2,6 +2,23 @@
 
 > Append-only log of what was accomplished each session. Pairs with `tasks.md` (what's left). This project travels between two PCs and uses **no local Claude memories** — this file is the durable record. Newest session first.
 
+## 2026-06-15 — Last 3 open questions RESOLVED; hook peek/nudge layer added (D19)
+
+Reviewed the three remaining open questions (Q1/Q3/Q5) with the user and **locked all of them** — design is now fully signed off (Q1–Q9 all resolved). Still pre-implementation; no app code. The session's headline was a user-raised idea that became a real design addition.
+
+**Decisions locked:**
+- **Q1 / D2 (confirmed) + new D19.** Long-poll `check_inbox` stays the **primary** delivery mechanism (`wait=True` default; `wait=False` for a cheap one-off check). On top of it we added an **optional client-side hook peek/nudge layer (D19)**: a thin hook calls a **read-only** `GET /api/peek?agent_id=…`, gets a pending-count + sender summary, and injects a nudge ("you have N messages — call `check_inbox`") into the agent's context. The hook **peeks, never claims**, so at-least-once (D3/D4) is fully preserved and the hub stays CLI-agnostic. Ships as `hook_peek.py` (stdlib-only) + a recipe, wired into the Step 6 E2E.
+- **Q3 / D6 (extended).** Kept the tri-state (reject unknown/disconnected; queue+`flagged_stale` for stale) and **added a TTL**: a `pending` message unclaimed past **`MESSAGE_TTL=86400s` (24h)** is swept to a new terminal **`expired`** state (distinct from `failed`, so the dashboard shows *why*). Parked `input_required` tasks are deliberately excluded from the TTL in v1.
+- **Q5.** **`VISIBILITY_TIMEOUT` raised 300→600s** (agent tasks routinely run >5 min → fewer false redeliveries; at-least-once means a low value only adds dupes, not data loss). `STALE_THRESHOLD=90s`, `LONGPOLL_TIMEOUT=30s`, `DASHBOARD_MESSAGE_LIMIT=100` accepted as-is; new `MESSAGE_TTL=86400s` added.
+
+**Hooks investigation (verified, not assumed).** The user proposed bridging the async hub → sync CLI via lifecycle hooks (pasted an AI-generated sketch). I verified the load-bearing claim against the **`agy.exe` binary** (151 MB, same method as last session's `serverUrl` check): agy **does** have a hooks system — config in **`hooks.json`** (gated by a `json-hooks-enabled` flag in `config.json`), types **`Pre/PostInvocationHook`, `Pre/PostToolHook`, `StopHook`, `AfkStopHook`**, an injection mechanism (**`HookSystemMessage` / `HookInjectedStep`**), and `auto_continue_on_max_generator_invocations`. Claude Code has the parallel set (`UserPromptSubmit`/`Stop`/`SessionStart`/`Pre`/`PostToolUse`).
+
+**Corrected the pasted sketch (don't copy literally):** (1) its `pre_prompt` event + `"inject_output":"append_to_system_prompt"` schema is **invented** — real injection is via the hook command's stdout (Claude Code `UserPromptSubmit`/`SessionStart`) or an agy `HookSystemMessage`; (2) it opened **SQLite directly and marked messages `delivered`** — which would add a 2nd DB writer (bypassing `db.py`) and **destroy at-least-once** (no claim, no ack). Hence the **peek-only** synthesis: the hook nudges, the MCP `check_inbox`→`reply`/`fail` path still does the real claim+ack. Honest limit recorded: a hook fires only on a trigger, so a fully idle agent waiting on a human still won't see mail until its next trigger (waking it via OS interrupt / stdin is rejected as terminal-hijacking).
+
+**Files changed (design-only):** `design-decisions.md` (D2/D6 updated, +D19, constants table: VISIBILITY 300→600s + new MESSAGE_TTL, Q1/Q3/Q5 resolved), `specs.md` (state machine +`expired`, Delivery section rewritten with the hook layer + `/api/peek`, send-to-stale +expiry, dashboard +Expired badge, schema status enum, constants §6), `architecture.md` (diagram +hook node/arrow, +§1b hook layer, db.py +`peek_inbox`/`expire_messages`, §5 +expiry sweep), `plan.md` (layout +`hook_peek.py`, Step 2 helpers + status enum, Step 3 `/api/peek` + Expired badge, Step 4 expire sweep, Step 5 +expired/peek tests, Step 6 +hook wiring), `tasks.md` (Q1/Q3/Q5 resolved, Steps 1–6 refreshed, +v2 items), `CLAUDE.md` (layout +`hook_peek.py`, conventions +hook-peek-only + expired, fixed stale "not a git repo" + open-questions note), `sessions.md` (this entry).
+
+**Still open:** nothing on design — Q1–Q9 all resolved. Implementation (Steps 1–6) still not started. Residual: `pip freeze` after the first install (now folded into Step 1).
+
 ## 2026-06-15 — Antigravity E2E check (D1/Q4 residual caveat CLOSED)
 
 Ran the one outstanding transport verification: does the Antigravity CLI actually connect to a **localhost** Streamable-HTTP MCP endpoint via `serverUrl`? **Result: yes — verified live.** (Still no hub code; used a throwaway probe.)

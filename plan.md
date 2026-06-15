@@ -11,6 +11,7 @@ This plan outlines the steps required to build the MCP Agent Hub in a future ses
    mcp-agent-hub/
    ├── hub.py           (Main FastAPI/FastMCP server)
    ├── db.py            (SQLite interactions)
+   ├── hook_peek.py     (stdlib-only client hook: peeks /api/peek, nudges the agent — D19)
    ├── templates/
    │   └── index.html   (Dashboard UI)
    ├── tests/           (db + MCP smoke tests)
@@ -20,7 +21,7 @@ This plan outlines the steps required to build the MCP Agent Hub in a future ses
 ## Step 2: Database Layer (`db.py`)
 1. `init_db()`: create the `agents` and `messages` tables if absent; set `PRAGMA journal_mode=WAL` (+ borrow `synchronous=NORMAL` / `busy_timeout` from MCP Agent Mail — see Prior Art); create indexes on `messages(recipient_id, status)` and `messages(session_id)`.
    * `agents`: `id` PK, `description` (TEXT, nullable), `skills` (TEXT/JSON), `status`, `last_seen`.
-   * `messages`: `id` PK, `session_id`, `parent_id` (nullable), `kind` (`task`|`input_request`, default `task`), `sender_id`, `recipient_id`, `payload`, `context`, `response`, `status` (`pending`|`in_progress`|`input_required`|`completed`|`failed`), `flagged_stale` (INT default 0), `claimed_at`, `created_at`, `updated_at`.
+   * `messages`: `id` PK, `session_id`, `parent_id` (nullable), `kind` (`task`|`input_request`, default `task`), `sender_id`, `recipient_id`, `payload`, `context`, `response`, `status` (`pending`|`in_progress`|`input_required`|`completed`|`failed`|`expired`), `flagged_stale` (INT default 0), `claimed_at`, `created_at`, `updated_at`.
 2. Connection helper: short-lived connections with `check_same_thread=False`, invoked off the event loop via `run_in_threadpool` (or use `aiosqlite`); a lightweight retry-on-`database is locked` with backoff (borrowed from Agent Mail).
 3. Registry helpers: `upsert_agent(id, skills_json, description)`, `get_all_agents()`, `set_agent_offline(id)`, `touch_last_seen(id)`.
 4. Message helpers:
@@ -30,14 +31,16 @@ This plan outlines the steps required to build the MCP Agent Hub in a future ses
    * `complete_message(id, response)` — mark `completed`; **un-park rule:** if the row is an `input_request`, flip its `parent_id` task `input_required → pending`, clear its `claimed_at`, and append the answer to the parent's `context` (D17).
    * `fail_message(id, error)`, `get_status(id)` (surface the pending `question` when `input_required`).
    * `reclaim_stale(visibility_timeout)` — revert unacked `in_progress` rows to `pending` (never `input_required`).
+   * `peek_inbox(agent_id)` — **read-only** count + sender summary of what `claim_pending` would return (backs `/api/peek`, D19); claims/mutates nothing.
+   * `expire_messages(message_ttl)` — sweep `pending` rows older than `MESSAGE_TTL` to the terminal `expired` state (D6/Q3); never touches `in_progress` or parked `input_required`.
 5. Store `skills` via `json.dumps`; parse with `json.loads` on read.
 
 ## Step 3: Web Dashboard (`templates/index.html` & `hub.py`)
 1. In `hub.py`, initialize `app = FastAPI(lifespan=...)` (lifespan wired to the MCP app — see Step 4).
 2. Configure Jinja2 templates.
 3. Create the `/` route to serve `index.html`.
-4. Create an `/api/state` route returning `{agents: get_all_agents(), messages: recent(limit=DASHBOARD_MESSAGE_LIMIT)}`, deriving online/stale/offline from `last_seen` + status.
-5. In `index.html`, fetch `/api/state` every 2 seconds and update the HTML tables. Use CDN Tailwind for styling, status badges (incl. **`Input Required`** and `Failed`), a **⚠ stale-recipient** flag on `flagged_stale` messages, per-agent **skills** (name + tags, full detail on expand), `session_id` thread grouping, and a payload/response/question modal.
+4. Create the JSON API routes: **`/api/state`** returning `{agents: get_all_agents(), messages: recent(limit=DASHBOARD_MESSAGE_LIMIT)}` (deriving online/stale/offline from `last_seen` + status); and the read-only **`/api/peek`** (`GET /api/peek?agent_id=…` → `db.peek_inbox()` → `{count, senders}`) backing the D19 hook layer — no claim, no mutation.
+5. In `index.html`, fetch `/api/state` every 2 seconds and update the HTML tables. Use CDN Tailwind for styling, status badges (incl. **`Input Required`**, `Failed`, and **`Expired`**), a **⚠ stale-recipient** flag on `flagged_stale` messages, per-agent **skills** (name + tags, full detail on expand), `session_id` thread grouping, and a payload/response/question modal.
 
 ## Step 4: The FastMCP Server (`hub.py`)
 1. Initialize `mcp = FastMCP("Agent Broker")`.
@@ -53,7 +56,7 @@ This plan outlines the steps required to build the MCP Agent Hub in a future ses
    * `check_status()` — surfaces the pending `question` when `input_required`
    * `disconnect_agent()`
 4. Mount the MCP ASGI app at `/mcp` via `mcp_app = mcp.http_app(path="/mcp")`, then `app = FastAPI(lifespan=combine_lifespans(hub_lifespan, mcp_app.lifespan))` and `app.mount("/mcp", mcp_app)`. Forwarding the MCP lifespan is **mandatory** (else "task group is not initialized"). Bind to `127.0.0.1`, **and add `Origin`-header validation** (allow missing/localhost, reject foreign origins) as a small ASGI/Starlette middleware — the spec-mandated DNS-rebinding defense (D18).
-5. Enforce the visibility timeout **lazily in the claim query** (the claim also grabs `in_progress` rows older than `VISIBILITY_TIMEOUT`); optionally start a small `asyncio` reclaim loop in `hub_lifespan` as a backstop (see `design-decisions.md`, D15).
+5. Enforce the visibility timeout **lazily in the claim query** (the claim also grabs `in_progress` rows older than `VISIBILITY_TIMEOUT`); optionally start a small `asyncio` loop in `hub_lifespan` as a backstop that runs both `reclaim_stale(VISIBILITY_TIMEOUT)` and `expire_messages(MESSAGE_TTL)` (the `pending`→`expired` sweep, D6/Q3) — see `design-decisions.md`, D15. The read-only `/api/peek` route (Step 3) and the shipped `hook_peek.py` complete the D19 layer; `hook_peek.py` is stdlib-only (`urllib`) and adds no dependency.
 
 ## Step 5: Automated Tests (`tests/`)
 1. DB unit tests:
@@ -62,9 +65,12 @@ This plan outlines the steps required to build the MCP Agent Hub in a future ses
    * `skills` JSON round-trip,
    * offline (explicit disconnect) vs stale (missed heartbeat) behavior,
    * **`input_required` round-trip** (D17): `request_input` parks the task + enqueues the child; the parked row is **excluded** from `claim_pending`/`reclaim_stale`; replying to the child **un-parks** the parent to `pending` with the answer in `context`,
-   * **`flagged_stale`** set on a send to a stale recipient (D6/Q8).
+   * **`flagged_stale`** set on a send to a stale recipient (D6/Q8),
+   * **`expired` sweep** (D6/Q3): a `pending` row older than `MESSAGE_TTL` moves to `expired`; an `in_progress` or parked `input_required` row of the same age does **not**,
+   * **`peek_inbox` is non-mutating** (D19): it reports the same count `claim_pending` would, and a following `claim_pending` still returns every message (peek claimed nothing).
 2. A scripted MCP client smoke test: `register → send → check_inbox → request_input → (sender) check_inbox → reply → (worker) check_inbox → reply → check_status`. Use the MCP Inspector CLI against the running server, e.g. `npx @modelcontextprotocol/inspector --cli http://localhost:8000/mcp --transport http --method tools/list` (and `--method tools/call --tool-name ...`), wired into the test flow.
 3. An `Origin`-validation check: a request with a foreign `Origin` header is rejected; one with no `Origin` (or a localhost `Origin`) passes (D18).
+4. A `/api/peek` HTTP check (D19): with N claimable messages for an agent, `GET /api/peek?agent_id=…` returns `count==N` + the sender list and mutates nothing (a subsequent `check_inbox` still claims all N).
 
 ## Step 6: End-to-End Testing
 1. Run the server: `uvicorn hub:app --port 8000 --host 127.0.0.1`.
@@ -75,3 +81,5 @@ This plan outlines the steps required to build the MCP Agent Hub in a future ses
 6. Observe the web dashboard as the message populates.
 7. In Antigravity CLI, prompt: *"Register, then check your inbox (wait for work) and respond to pending messages."*
 8. Observe the response complete the loop on the dashboard, and confirm the sender sees it via `check_status`.
+9. **Wire the D19 hook layer.** Install `hook_peek.py` into both clients: Claude Code via `~/.claude/settings.json` (`Stop` / `UserPromptSubmit` running `python hook_peek.py --agent-id <id>`); Antigravity `agy` via `hooks.json` (`StopHook` / `PreInvocationHook`, with `json-hooks-enabled`). Confirm each peeks `GET /api/peek` on its trigger.
+10. **Confirm the nudge path:** send a message to an agent that is between turns, then fire its hook (finish a turn / submit a prompt) and confirm the injected "you have N messages — call `check_inbox`" nudge appears and the agent then claims via `check_inbox`. Note the honest limit — a fully idle agent waiting on a human won't see it until its next trigger.

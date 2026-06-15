@@ -20,7 +20,7 @@ The system consists of two interfaces served from a single Python application:
 
 ### Reliable Message Brokering (at-least-once)
 * Messages are routed via a SQLite-backed queue that survives server or agent restarts.
-* State machine: `pending` → `in_progress` → `completed` / `failed`, plus a non-terminal **`input_required`** branch — a worker can pause `in_progress` work to ask the original sender a clarifying question (see *Multi-turn Clarification & Sessions* below; `design-decisions.md` D17).
+* State machine: `pending` → `in_progress` → `completed` / `failed`, plus a non-terminal **`input_required`** branch — a worker can pause `in_progress` work to ask the original sender a clarifying question (see *Multi-turn Clarification & Sessions* below; `design-decisions.md` D17). A `pending` message never claimed within `MESSAGE_TTL` is swept to the terminal **`expired`** state (`design-decisions.md` D6/Q3).
 * **Atomic claim:** `check_inbox` claims an agent's `pending` messages in a single atomic statement (`UPDATE ... RETURNING`), flipping them to `in_progress` and stamping `claimed_at`. Concurrent callers never receive the same message twice.
 * **Explicit ack:** `reply_to_message` moves a message to `completed`; `fail_message` moves it to `failed`. Either one acks the claim.
 * **Visibility timeout / redelivery (lazy-on-claim):** an `in_progress` message not acked within `VISIBILITY_TIMEOUT` becomes eligible for redelivery — the atomic claim query grabs `pending` rows **and** `in_progress` rows whose `claimed_at` is older than the timeout, so a crashed/restarted worker's task is recovered the next time any consumer polls. No scheduler is required; an optional background loop is only a backstop for messages stranded while nobody polls (see `design-decisions.md`, D15). Delivery is therefore **at-least-once**, so message handlers should tolerate the occasional duplicate.
@@ -33,14 +33,18 @@ The system consists of two interfaces served from a single Python application:
 * This deliberately **reuses the existing inbox/reply machinery** — no special client support needed — and mirrors A2A's `input-required` + same-`taskId`/`contextId` resume pattern.
 
 ### Delivery / Notification
-* Agents are CLI processes with no inbound port; the Hub **cannot push** to them.
-* `check_inbox` supports a blocking long-poll (`wait=true`, `timeout=N`): the call returns as soon as a message is available, or when the timeout elapses. An "on-duty" agent stays parked in a single tool call instead of spin-polling or waiting for a human nudge.
+* Agents are CLI processes with no inbound port; the Hub **cannot push** to them. Delivery is therefore pull-based, with two complementary mechanisms:
+* **Primary — long-poll `check_inbox`** (`wait=true` default, `timeout=N`): the call returns as soon as a message is available, or when the timeout elapses. An "on-duty" agent stays parked in a single tool call instead of spin-polling or waiting for a human nudge. (`wait=false` is a cheap one-off "anything for me?" check.)
 * Recommended agent work-loop: `register_agent` → `check_inbox(wait=true)` → handle → `reply_to_message` → repeat.
+* **Optional — hook peek/nudge layer (D19).** Both target clients expose lifecycle hooks (Claude Code: `Stop` / `UserPromptSubmit` / `SessionStart`; Antigravity `agy`: `StopHook` / `PreInvocationHook`, configured in `hooks.json`). A thin shipped script (`hook_peek.py`) calls the **read-only** `GET /api/peek?agent_id=…`, gets back a pending-count + sender summary, and injects a nudge ("you have N messages from X — call `check_inbox`") into the agent's context. The hook **peeks, never claims** — actual delivery and the ack still flow through `check_inbox` → `reply_to_message` / `fail_message`, so at-least-once is untouched. This makes delivery *feel* push-like (especially the Stop-hook variant, which keeps an agent in its loop rather than going idle) without coupling the hub to any client.
+* **`GET /api/peek?agent_id=…`** is a plain (non-MCP) read-only JSON endpoint on the FastAPI app, sharing `db.py` (no second DB opener). It returns `{ count, senders: [...] }` mirroring exactly what `check_inbox` *would* claim (claimable `pending` rows incl. `input_request`; excludes parked `input_required`), but mutates nothing.
+* **Honest limit:** a hook fires only on a *trigger* (tool call, invocation, stop, prompt submit). A truly idle agent waiting on a human won't see mail until its next trigger — the same fundamental constraint long-poll has. Waking a fully idle agent (OS interrupt / writing to its stdin) is out of scope (terminal-hijacking).
 
 ### Disconnect / Liveness
 * `disconnect_agent` moves an agent's status to `offline`. The Hub **rejects new sends** to an explicitly-disconnected agent.
 * **Staleness is distinct from disconnect.** A stale agent (missed heartbeat) may just be busy or mid-restart, so messages addressed to it are still **queued** and redelivered when it returns. Only an explicit disconnect blocks sends.
 * **Send-to-stale is flagged, not silent (D6, refined per Q8).** When `send_message` queues to a *stale* recipient, the message is **marked** (`flagged_stale`) so the dashboard surfaces it distinctly (a "⚠ stale recipient" badge). Accepted and visible — rather than silently queued or rejected. The wider field leaves send-to-stale unsolved (see survey), so this is our own refinement.
+* **Expiry (D6, extended per Q3).** A message left `pending` (never successfully claimed) longer than `MESSAGE_TTL` (24h default) is swept to the terminal **`expired`** state — so mail addressed to an agent that never returns self-cleans instead of accumulating. The sweep targets `pending` rows only; a parked `input_required` task is **not** expired by this TTL in v1 (it waits on its clarification answer). Implemented as a lazy check plus the optional backstop loop — the same shape as the visibility-timeout reclaim (D15).
 
 ## 3. MCP Tool Definitions
 
@@ -86,7 +90,7 @@ The dashboard is served at `http://localhost:8000/` (live data via `/api/state`;
   * ID (and `session_id` / thread grouping)
   * Timestamp
   * Sender -> Recipient
-  * Status Badge (Pending, In Progress, **Input Required**, Completed, **Failed**)
+  * Status Badge (Pending, In Progress, **Input Required**, Completed, **Failed**, **Expired**)
   * A **⚠ stale recipient** flag on messages sent to a stale agent (`flagged_stale`).
   * A button to view the full payload/response (and, for an `input_request`, the question) in a modal.
 * `/api/state` returns the recent messages (capped at `DASHBOARD_MESSAGE_LIMIT`) plus all agents, and is polled every 2 seconds.
@@ -96,9 +100,9 @@ The dashboard is served at `http://localhost:8000/` (live data via `/api/state`;
 * File: `hub.db` stored in the same directory as the server script.
 * Schema:
   * `agents` table: `id` (PK), `description` (TEXT, nullable), `skills` (TEXT / JSON), `status`, `last_seen`.
-  * `messages` table: `id` (PK), `session_id`, `parent_id` (nullable, threads `input_request` → parked task), `kind` (`task` | `input_request`, default `task`), `sender_id`, `recipient_id`, `payload`, `context`, `response`, `status` (`pending` | `in_progress` | `input_required` | `completed` | `failed`), `flagged_stale` (INTEGER, default 0), `claimed_at`, `created_at`, `updated_at`.
+  * `messages` table: `id` (PK), `session_id`, `parent_id` (nullable, threads `input_request` → parked task), `kind` (`task` | `input_request`, default `task`), `sender_id`, `recipient_id`, `payload`, `context`, `response`, `status` (`pending` | `in_progress` | `input_required` | `completed` | `failed` | `expired`), `flagged_stale` (INTEGER, default 0), `claimed_at`, `created_at`, `updated_at`.
   * Index on `messages(recipient_id, status)` for inbox queries; index on `messages(session_id)` for thread lookups.
   * `skills` is serialized as JSON text (SQLite has no native array type).
 
 ## 6. Configuration Constants
-Tunable values referenced above — `VISIBILITY_TIMEOUT`, `STALE_THRESHOLD`, the long-poll default `timeout`, and `DASHBOARD_MESSAGE_LIMIT` — with their proposed defaults are recorded in `design-decisions.md`.
+Tunable values referenced above — `VISIBILITY_TIMEOUT` (600s), `STALE_THRESHOLD` (90s), the long-poll default `timeout` / `LONGPOLL_TIMEOUT` (30s), `DASHBOARD_MESSAGE_LIMIT` (100), and `MESSAGE_TTL` (86400s — the `pending`→`expired` sweep) — with their defaults and rationale are recorded in `design-decisions.md`.

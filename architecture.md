@@ -8,6 +8,7 @@ graph TD
         subgraph Agents
             Claude[Claude Code CLI]
             Gemini[Antigravity CLI]
+            Hook[hook_peek.py<br/>Stop / PreInvocation hook]
         end
 
         subgraph MCP Agent Hub
@@ -24,6 +25,7 @@ graph TD
 
         Claude <-->|Streamable HTTP| FastMCP
         Gemini <-->|Streamable HTTP| FastMCP
+        Hook -->|GET /api/peek read-only| FastAPI
         User[Human Operator] <-->|Browser| UI
     end
 ```
@@ -64,12 +66,20 @@ A single FastMCP middleware (`on_call_tool` hook) centralizes concerns that woul
 
 This keeps the tool bodies focused on their own DB mutation. `mcp.add_middleware(...)` runs first-added first on the way in.
 
+### 1b. Hook Peek/Nudge Layer (`hook_peek.py` + `/api/peek`)
+An **optional, client-side** layer that makes pull-based delivery feel push-like without weakening the queue (see `design-decisions.md`, D19):
+* The hub exposes a plain read-only endpoint **`GET /api/peek?agent_id=…`** on the FastAPI app (not an MCP tool), backed by `db.peek_inbox()`. It returns `{ count, senders: [...] }` mirroring what `check_inbox` would claim — but **mutates nothing** (no claim, no status change).
+* A shipped **`hook_peek.py`** (stdlib-only — `urllib`, no extra deps) is wired into each client's hooks: Claude Code `Stop` / `UserPromptSubmit` / `SessionStart` (in `~/.claude/settings.json`); Antigravity `agy` `StopHook` / `PreInvocationHook` (in `hooks.json`, gated by `json-hooks-enabled`). On its trigger it peeks and, when `count > 0`, prints a nudge to stdout that the client injects into the agent's context.
+* Because the hook only **peeks**, the authoritative delivery + ack path (`check_inbox` → `reply_to_message` / `fail_message`, at-least-once) is unchanged. The `Stop` / `AfkStop` variant is the most useful — it keeps an agent looping on pending work instead of going idle. *(agy's hook system was verified directly from the `agy.exe` binary — D19.)*
+
 ### 2. The Database Layer (`db.py`)
 Encapsulates all SQLite interactions; called by both the FastAPI routes (to read) and the FastMCP tools (to mutate). Uses WAL mode, short-lived connections (with `check_same_thread` handled), and runs blocking calls off the event loop (via `run_in_threadpool` or `aiosqlite`) so DB I/O does not stall async handlers.
 * `upsert_agent(id, skills, description)` (skills stored as JSON, D16), `get_all_agents()`, `set_agent_offline(id)`, `touch_last_seen(id)`
 * `enqueue_message(...)` — sets `session_id` (minted or supplied), optional `parent_id`/`kind`, and `flagged_stale` when the recipient is stale (D6/Q8)
 * `claim_pending(agent_id)` — the atomic `UPDATE ... RETURNING` claim (claims `pending` rows incl. `input_request` kind; **skips `input_required` parked rows**)
 * `reclaim_stale(visibility_timeout)` — reverts unacked `in_progress` back to `pending` (never touches parked `input_required` rows)
+* `peek_inbox(agent_id)` — **read-only** count + sender summary of what `claim_pending` *would* return (backs the `/api/peek` hook endpoint, D19); claims/mutates nothing
+* `expire_messages(message_ttl)` — sweeps `pending` rows older than the TTL to the terminal `expired` state (D6/Q3); never touches parked `input_required`
 * `request_input(message_id, question)` — parks the task as `input_required` and enqueues the child `input_request` message (D17)
 * `complete_message(id, response)` — also runs the **un-park rule**: if the completed row is an `input_request`, flip its `parent_id` task from `input_required` back to `pending` and append the answer to the parent's `context` (D17)
 * `fail_message(id, error)`, `get_status(message_id)` (surfaces the pending `question` when `input_required`)
@@ -84,7 +94,7 @@ The legacy HTTP+SSE transport (`GET /sse` + `POST /messages`) is deprecated and 
 FastAPI serves HTML templates using `Jinja2Templates`. To provide live updates without a React/WebSocket setup, the dashboard runs vanilla JavaScript that polls `/api/state` every 2 seconds and refreshes the agents table and message queue. `/api/state` caps the number of returned messages.
 
 ### 5. Liveness & Redelivery
-Redelivery is **lazy-on-claim** (see `design-decisions.md`, D15): the atomic claim query itself is eligible to grab any `in_progress` row whose `claimed_at < now - VISIBILITY_TIMEOUT`, so a crashed/unacked task is recovered the moment the next consumer polls — no scheduler needed for correctness. An optional lightweight `asyncio` loop started in the lifespan runs the same reclaim `UPDATE` every ~`VISIBILITY_TIMEOUT/2` as a **backstop** for messages stranded while nobody is polling. `last_seen` is refreshed on every tool call (via the middleware, §1a); agents past `STALE_THRESHOLD` render as "stale" without blocking sends (a send to a stale agent is queued **and `flagged_stale`** for the dashboard, D6/Q8). A task parked as **`input_required`** (D17) is excluded from both the lazy claim and the reclaim sweep — it waits on its child `input_request` answer, not on a visibility timeout.
+Redelivery is **lazy-on-claim** (see `design-decisions.md`, D15): the atomic claim query itself is eligible to grab any `in_progress` row whose `claimed_at < now - VISIBILITY_TIMEOUT`, so a crashed/unacked task is recovered the moment the next consumer polls — no scheduler needed for correctness. An optional lightweight `asyncio` loop started in the lifespan runs the same reclaim `UPDATE` every ~`VISIBILITY_TIMEOUT/2` as a **backstop** for messages stranded while nobody is polling. `last_seen` is refreshed on every tool call (via the middleware, §1a); agents past `STALE_THRESHOLD` render as "stale" without blocking sends (a send to a stale agent is queued **and `flagged_stale`** for the dashboard, D6/Q8). A task parked as **`input_required`** (D17) is excluded from both the lazy claim and the reclaim sweep — it waits on its child `input_request` answer, not on a visibility timeout. The same optional backstop loop also runs `expire_messages(MESSAGE_TTL)` — sweeping `pending` rows older than the TTL to the terminal **`expired`** state (D6/Q3); parked `input_required` tasks are excluded from this sweep too.
 
 ### 6. Security / Trust Model
 This is a single-user, localhost developer tool with **no authentication**. The tools trust whatever `agent_id` they are given, so any local process could in principle register as another agent, drain its inbox (`check_inbox(agent_id)`), or send messages as it. The mitigation is binding to `127.0.0.1` only. Multi-user authentication is explicitly out of scope for v1 (see `design-decisions.md`, D11).
