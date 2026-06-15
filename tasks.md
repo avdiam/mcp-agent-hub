@@ -2,6 +2,8 @@
 
 > **This file is the source of truth for what's left to do.** This project travels between two PCs and uses **no local Claude memories** — anything worth preserving lives here (pending work) or in `sessions.md` (history of what's done). Update both in the same change as the work.
 
+> **▶ START HERE (next session).** Implementation has **not started** — design is fully locked (D1–D25) and all deps are verified live, so the only residual is the install-time `pip freeze`. **Next action: Step 1 (P1)** in the *Implementation* section below (venv → `pip install -r requirements.txt` → `pip freeze` → create the directory structure incl. `hook_peek.py`). First skim the newest `sessions.md` entry + the **Build phasing** block in `plan.md`, then build in order **P1 → P2 → P3 → P4** (D25).
+
 ## Design questions — ALL RESOLVED (as of 2026-06-15)
 - [x] **Q1 / D2 — Delivery model.** RESOLVED (2026-06-15) → **D2 (confirmed) + D19**: long-poll `check_inbox` stays primary (`wait=True` default; `wait=False` for one-off checks); **added an optional hook peek/nudge layer** — read-only `/api/peek` + a shipped `hook_peek.py` (Claude Code `Stop`/`UserPromptSubmit`; agy `StopHook`/`PreInvocationHook`). The hook **peeks, never claims**, so at-least-once is preserved. agy's hook system verified from the `agy.exe` binary.
 - [x] **Q3 / D6 — Send-to-stale policy.** RESOLVED (2026-06-15) → **D6 (extended)**: explicit `disconnect` blocks new sends; mere staleness still queues (+`flagged_stale`); **plus** a `pending` message unclaimed past `MESSAGE_TTL` (24h) is swept to a new terminal **`expired`** state (distinct from `failed`).
