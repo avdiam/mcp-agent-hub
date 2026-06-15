@@ -12,7 +12,7 @@
 - [x] **Q9 — `Origin`-header validation.** RESOLVED (2026-06-15, user accepted) → **D18**: validate `Origin` on `/mcp` alongside the `127.0.0.1` bind. Folded into docs.
 
 ## To verify (not blockers, but confirm before locking)
-- [ ] **Antigravity → `localhost` over Streamable HTTP.** `serverUrl` key is confirmed supported; no source demoed it pointed at `http://localhost`. Verify against the real Antigravity CLI during E2E (plan Step 6). This is the one residual caveat on D1.
+- [x] **Antigravity → `localhost` over Streamable HTTP.** VERIFIED 2026-06-15 — the AGY CLI (`agy --print`) completed a full MCP handshake (initialize → SSE → tools/list → clean teardown) against a localhost Streamable-HTTP server via `serverUrl`. **Path correction:** AGY CLI reads `~/.gemini/config/mcp_config.json` (not `~/.gemini/antigravity/…`). Write UTF-8 no-BOM. D1 caveat closed. See `sessions.md`.
 - [x] **Read [MCP Agent Mail](https://github.com/Dicklesworthstone/mcp_agent_mail) source** — done 2026-06-15. Build-from-scratch verdict holds. It's on `fastmcp` 2.x + SQLAlchemy/SQLModel ORM; nests the MCP lifespan manually; instruments via Starlette HTTP middleware + per-tool decorators. **Borrow for `db.py`:** extra WAL pragmas (`synchronous=NORMAL`, `busy_timeout`, passive `wal_checkpoint`) + lightweight retry-on-lock. See `design-decisions.md` Prior Art.
 - [x] **Verified `combine_lifespans` import path + `mcp.http_app()` signature** against the real `fastmcp` 3.4.2 source — 2026-06-15 (see `design-decisions.md` § Pre-build API Verification; note the new meta-package / `fastmcp-slim` split). **Residual:** still run `pip freeze` after first install (Step 1) to lock exact patch versions + confirm transitive `starlette`/`uvicorn`/`mcp`.
 
@@ -22,7 +22,7 @@
 - [ ] **Step 3** — dashboard: `index.html` (Tailwind CDN, status badges incl. **Input Required** + Failed, **⚠ stale-recipient** flag, per-agent **skills**, `session_id` grouping, payload/response/question modal), `/` route, `/api/state` (agents + recent messages capped at `DASHBOARD_MESSAGE_LIMIT`).
 - [ ] **Step 4** — `hub.py`: `FastMCP` instance, the cross-cutting `on_call_tool` middleware (`last_seen` + structured logging), the **9 `@mcp.tool`s** (incl. `request_input`; `reply_to_message` un-park rule), mount via `mcp.http_app(path="/mcp")` + `combine_lifespans`, **`Origin`-validation middleware** (D18), lazy reclaim (+ optional asyncio backstop loop), bind `127.0.0.1`.
 - [ ] **Step 5** — tests: DB unit tests (atomic claim under concurrency, visibility-timeout redelivery, **skills** JSON round-trip, offline-vs-stale, **`input_required` park/un-park**, **`flagged_stale`**) + scripted MCP smoke test (incl. `request_input` round-trip) via MCP Inspector CLI + an `Origin`-rejection check.
-- [ ] **Step 6** — E2E: run server, open dashboard, wire Claude Code (`type:http`) + Antigravity (`serverUrl`), run the haiku cross-agent demo, confirm `check_status` closes the loop.
+- [ ] **Step 6** — E2E: run server, open dashboard, wire Claude Code (`type:http`) + Antigravity (`serverUrl` in `~/.gemini/config/mcp_config.json` — verified), run the haiku cross-agent demo, confirm `check_status` closes the loop.
 
 ## Possible future / v2 (deferred)
 - [ ] Optional auth (FastMCP `TokenVerifier` / static bearer token) — keep `127.0.0.1` binding regardless. Out of scope for v1 (D11).

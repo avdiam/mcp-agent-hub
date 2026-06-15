@@ -15,3 +15,6 @@ hub.db-shm
 .env
 .DS_Store
 Thumbs.db
+
+# Antigravity (AGY) CLI workspace artifact, created when running `agy` in this dir during E2E
+cache/

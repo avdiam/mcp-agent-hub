@@ -70,7 +70,7 @@ This plan outlines the steps required to build the MCP Agent Hub in a future ses
 1. Run the server: `uvicorn hub:app --port 8000 --host 127.0.0.1`.
 2. Open the web dashboard at `http://localhost:8000`.
 3. Configure Claude Code: `claude mcp add --transport http agent-hub http://localhost:8000/mcp` (or `.mcp.json` with `{"type": "http", "url": "http://localhost:8000/mcp"}`). Verify with `claude mcp list` and the `/mcp` panel (tool count).
-4. Configure Antigravity CLI: add `{"mcpServers": {"agent-hub": {"serverUrl": "http://localhost:8000/mcp"}}}` to `~/.gemini/antigravity/mcp_config.json` (note the `serverUrl` key, not `url`). **Confirm the `serverUrl` → `localhost` connection actually succeeds here** — this is the one residual transport caveat (see `design-decisions.md`, D1/Q4).
+4. Configure Antigravity CLI: add `{"mcpServers": {"agent-hub": {"serverUrl": "http://localhost:8000/mcp"}}}` to **`~/.gemini/config/mcp_config.json`** — the path the `agy` CLI actually reads (Windows `C:\Users\<you>\.gemini\config\mcp_config.json`), **not** `~/.gemini/antigravity/mcp_config.json`. Note the `serverUrl` key (not `url`); write it **UTF-8 without BOM** (the Go JSON parser rejects a BOM) and don't leave the file empty (an empty file logs `unexpected end of JSON input`). **Verified 2026-06-15** that AGY connects to a `http://localhost` Streamable HTTP endpoint this way — D1/Q4 caveat closed (see `sessions.md`).
 5. In Claude Code, prompt: *"Register yourself, then ask Antigravity to write a haiku about APIs."*
 6. Observe the web dashboard as the message populates.
 7. In Antigravity CLI, prompt: *"Register, then check your inbox (wait for work) and respond to pending messages."*
