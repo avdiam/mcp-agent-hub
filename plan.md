@@ -16,7 +16,7 @@ Run **`/code-review`** on each phase's diff, **`/security-review`** after P3, an
 ## Step 1: Project Initialization & Dependencies
 1. Create a virtual environment (`python -m venv venv`) and activate it.
 2. Install from the pinned `requirements.txt` (resolved: standalone **`fastmcp` 3.x** — see `design-decisions.md`, D13):
-   `pip install -r requirements.txt` (`fastmcp>=3.4,<4`, `fastapi`, `uvicorn[standard]`, `aiosqlite`, `jinja2`, `pydantic`; dev: `pytest`, `httpx`). Do **not** self-pin `starlette` — let `fastmcp` resolve it (3.4.1 floors `starlette>=1.0.1` for CVE-2026-48710). **`pip freeze` after install** to lock patch versions. **Use Context7** to re-verify the live FastMCP 3.x API (`http_app`, `combine_lifespans`, `add_middleware`/`on_call_tool`, the in-memory `Client`) + current FastAPI/uvicorn before coding against them (these facts postdate the assistant's training cutoff); optionally scaffold the FastMCP server with the **`mcp-server-dev`** plugin.
+   `pip install -r requirements.txt` (`fastmcp>=3.4,<4`, `fastapi`, `uvicorn[standard]`, `aiosqlite`, `jinja2`, `pydantic`; dev: `pytest`, `httpx`, `ruff`). Do **not** self-pin `starlette` — let `fastmcp` resolve it (3.4.1 floors `starlette>=1.0.1` for CVE-2026-48710). **`pip freeze` after install** to lock patch versions. **Use Context7** to re-verify the live FastMCP 3.x API (`http_app`, `combine_lifespans`, `add_middleware`/`on_call_tool`, the in-memory `Client`) + current FastAPI/uvicorn before coding against them (these facts postdate the assistant's training cutoff); optionally scaffold the FastMCP server with the **`mcp-server-dev`** plugin.
 3. Create the basic directory structure:
    ```text
    mcp-agent-hub/

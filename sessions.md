@@ -15,6 +15,8 @@ Triaged an independent pre-build evaluation report (Gemini, `evaluation_report.m
 
 **Files changed:** `requirements.txt` (+`ruff`, kept), `tasks.md` (v2 retention bullet now names the abandoned-`result`/`input_request` vector; D24 bullet + Step 2 reverted), `design-decisions.md` / `specs.md` / `plan.md` (D24 sweep wording reverted to `kind='task'` only), `sessions.md` (this entry, replacing the earlier premature one). `architecture.md` needed no edit — the revert restored consistency with it.
 
+**Follow-up (same day):** reflected the adopted `ruff` in the Step-1 dev-deps lists (`plan.md`, `tasks.md`) and the `design-decisions.md` Dev-Tooling inventory, so the docs match `requirements.txt`.
+
 **Still open:** nothing on design — Q1–Q9 + D20–D25 all locked (D24 unchanged from its original form). Implementation (P1–P4 / Steps 1–6) not started. Residual: install-time `pip freeze` (Step 1).
 
 ## 2026-06-15 — Live web verification of post-cutoff deps (FastMCP / FastAPI / CVE) + FastAPI pin fix

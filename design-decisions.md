@@ -71,6 +71,7 @@ Each item in the Decision Log is the **current default baked into the docs**. Ve
   - **`/code-review`** on each phase's diff (Steps 2–5, especially after the Step-4 core); **`/security-review`** after Step 4 and before any non-localhost consideration (no-auth trust model, Origin D18, `/api/peek` read-only D19, `db.py` SQL handling).
   - **`/run` + `/verify`** drive the Step 6 cross-agent E2E (launch hub + dashboard; confirm the real haiku round-trip + the hook-nudge path).
   - **MCP Inspector CLI** — the one real-over-HTTP smoke check (transport + Origin + `/api/peek`), complementing the in-memory `Client` unit tests (D-test split, plan Step 5).
+  - **`ruff`** — lint + format the codebase (dev dep, `ruff>=0.4`); run `ruff check` / `ruff format` per phase before committing/`/code-review`. *(Adopted 2026-06-16 from the eval triage.)*
 
 ### Competitive landscape & design-validation survey (2026-06-15)
 
