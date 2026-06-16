@@ -2,6 +2,21 @@
 
 > Append-only log of what was accomplished each session. Pairs with `tasks.md` (what's left). This project travels between two PCs and uses **no local Claude memories** — this file is the durable record. Newest session first.
 
+## 2026-06-16 — Pre-build evaluation-report triage (adopted `ruff`; reverted a premature v1 TTL escalation)
+
+Triaged an independent pre-build evaluation report (Gemini, `evaluation_report.md`) against the locked design. Still pre-implementation; no app code.
+
+**Triage outcome:**
+- **Adopted:** `ruff>=0.4` into `requirements.txt` dev deps (fast lint/format from day one) — the one clearly-new, low-cost suggestion.
+- **Declined:** `structlog` (cuts against the zero-extra-deps ethos — stdlib `logging`+JSON already satisfies D22); payload as `dict`/`Any` (misreads the domain — agent messages are prose, `str` is the right primitive; JSON-stringify by convention if structure is ever needed); terminal-row DB GC and a `sessions` table (already a known v2 item / deliberately out of scope).
+- **Surfaced (sharper than the report):** the one *invisible* unbounded-growth vector the report's terminal-row-GC idea misses — a `pending kind='result'` whose requester never re-checks its inbox (plus a never-read `input_request`) escapes claim, reclaim, **and** the D24 TTL carve-out, so it sits `pending` forever. **Low severity** (localhost, slow, no correctness impact — `check_status` is the durable read).
+
+**Course-correction:** a first pass *prematurely escalated* that v2-grade finding into a v1 edit of locked decision **D24** (extending the TTL sweep to `kind='result'`) and applied it **incompletely** — leaving `architecture.md` (×2), the `design-decisions.md` D6 row, and a `tasks.md` v2 bullet still asserting the original "task-only / result-excluded" behavior (4 internal contradictions; the "perfectly synced/locked" claim was therefore wrong). **Reverted** the D24 / `specs.md` / `plan.md` / `tasks.md` wording back to "`kind='task'` only" so D1–D25 stay exactly as signed off, and **folded the result-row vector into the existing v2 retention/GC workstream** (`tasks.md`) — handle all row-growth together there, preferring GC/*delete* over a `state=expired` patch (which would mislabel a delivered-elsewhere notification as "Expired" on the dashboard and slightly narrow D20 for senders absent >24h). Kept `ruff`.
+
+**Files changed:** `requirements.txt` (+`ruff`, kept), `tasks.md` (v2 retention bullet now names the abandoned-`result`/`input_request` vector; D24 bullet + Step 2 reverted), `design-decisions.md` / `specs.md` / `plan.md` (D24 sweep wording reverted to `kind='task'` only), `sessions.md` (this entry, replacing the earlier premature one). `architecture.md` needed no edit — the revert restored consistency with it.
+
+**Still open:** nothing on design — Q1–Q9 + D20–D25 all locked (D24 unchanged from its original form). Implementation (P1–P4 / Steps 1–6) not started. Residual: install-time `pip freeze` (Step 1).
+
 ## 2026-06-15 — Live web verification of post-cutoff deps (FastMCP / FastAPI / CVE) + FastAPI pin fix
 
 Re-verified the post-training-cutoff facts the docs assert (assistant cutoff is Jan 2026; docs are dated June 2026) against **primary sources** via web search/fetch — PyPI metadata, the official gofastmcp docs, and the CVE record — then applied the one config correction it surfaced.
