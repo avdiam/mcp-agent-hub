@@ -2,6 +2,21 @@
 
 > Append-only log of what was accomplished each session. Pairs with `tasks.md` (what's left). This project travels between two PCs and uses **no local Claude memories** — this file is the durable record. Newest session first.
 
+## 2026-06-16 — Researched Zed's Agent Client Protocol (ACP); rejected as transport, recorded interop + validations
+
+User asked whether **Agent Client Protocol (ACP)** could be used directly, with our MCP server, or as inspiration — *before* building. Did primary-source research (zed.dev/acp, agentclientprotocol.com spec pages, LF AI blog). Still pre-implementation; no app code.
+
+**Key disambiguation:** there are **two** "ACP"s. Our existing survey referenced **IBM's Agent _Communication_ Protocol** (REST agent↔agent, merged into A2A Sept 2025, winding down). The user meant **Zed's Agent _Client_ Protocol** — the "LSP for coding agents," a *vertical* editor↔agent protocol (JSON-RPC over stdio; editor spawns the agent as a subprocess; Gemini CLI = reference agent, Claude Code via adapter). Never previously evaluated.
+
+**Verdict (3 questions):**
+- **Use directly / as transport? No.** Wrong topology — editor↔agent (vertical, 1:1, editor owns the subprocess lifecycle), not our agent↔agent (horizontal, N peers ↔ central HTTP broker). No peer/registry/inbox concept; would force the hub to masquerade as an "editor" spawning each agent. Sharper version of why A2A-as-transport was rejected. Clincher: in ACP, Claude Code & Gemini CLI **are the Agents** (driven by an editor) — ACP gives our exact target clients **no path to reach each other**.
+- **Use _with_ our MCP server? Yes — nothing to build.** ACP layers *above* MCP: the editor passes `mcpServers` (http supported) into `session/new`, and the agent connects as an MCP client. So an ACP-hosted Claude Code/Gemini CLI (e.g. inside Zed) reaches the hub **unchanged** via the editor's http `mcpServers` config — **validates D1**.
+- **Inspiration? A few validations + 1 optional v2 refinement.** `session/request_permission` is a **4th converging validation of D17** (pause-ask-resume; A2A/LangGraph/CrewAI were the first 3). ACP's `tool_call` status lifecycle validates our message state machine. Optional v2 polish (parked, not adopted): typed cancel/reject `outcome` for clarifications, typed `stop_reason`/fail-category enum, MCP `ContentBlock` if multimodal ever matters (v1 keeps `str`). Positioning line: the hub is the **horizontal, durable, local peer complement to ACP's vertical editor↔agent standard**.
+
+**Files changed (research/doc-only):** new `mem/acp-evaluation.md` (full analysis + sources); `design-decisions.md` (A2A bullet disambiguation note + new ACP survey bullet under "future options"); `tasks.md` (v2 ACP-derived-polish bullet); `sessions.md` (this entry). **No design decision (D1–D25) reopened or changed.**
+
+**Still open:** nothing on design. Implementation (P1–P4 / Steps 1–6) still not started; residual is the install-time `pip freeze` (Step 1).
+
 ## 2026-06-16 — Pre-build evaluation-report triage (adopted `ruff`; reverted a premature v1 TTL escalation)
 
 Triaged an independent pre-build evaluation report (Gemini, `evaluation_report.md`) against the locked design. Still pre-implementation; no app code.
