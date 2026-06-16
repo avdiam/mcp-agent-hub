@@ -17,6 +17,8 @@ Triaged an independent pre-build evaluation report (Gemini, `evaluation_report.m
 
 **Follow-up (same day):** reflected the adopted `ruff` in the Step-1 dev-deps lists (`plan.md`, `tasks.md`) and the `design-decisions.md` Dev-Tooling inventory, so the docs match `requirements.txt`.
 
+**Follow-up 2 (same day):** vendored portable, repo-tracked tooling so it travels between the two PCs — a project-local status line (`.claude/statusline.py` + `.claude/settings.json`, relative-path command; commit `43fb3e5`) — and tightened the `CLAUDE.md` continuity rule: **no per-PC Claude memories** (`~/.claude` doesn't travel between the two machines); durable notes that don't fit `tasks.md`/`sessions.md` now go in a new in-repo **`mem/`** folder (see `mem/README.md`).
+
 **Still open:** nothing on design — Q1–Q9 + D20–D25 all locked (D24 unchanged from its original form). Implementation (P1–P4 / Steps 1–6) not started. Residual: install-time `pip freeze` (Step 1).
 
 ## 2026-06-15 — Live web verification of post-cutoff deps (FastMCP / FastAPI / CVE) + FastAPI pin fix

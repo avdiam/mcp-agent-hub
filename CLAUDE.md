@@ -25,12 +25,15 @@ There is **no code yet** — only design docs. They are the source of truth; rea
 
 ## Session continuity — read these FIRST every session
 
-This project **travels between two PCs** and deliberately uses **no local Claude memories** — nothing durable is stored in `~/.claude`. All preserved state lives in two checked-in files; read them at the start of every session and update them in the **same change** as the work they describe:
+This project is **worked on from two separate PCs**, so **nothing may be saved as a per-PC Claude memory.** Do **not** use Claude Code's built-in memory tool — it writes under `~/.claude/…` (its `MEMORY.md` + `memory/` files), which is local to one machine and will **not** travel between them. Anything worth preserving must live **inside the repo**, where it moves with `git`.
+
+All preserved state lives in checked-in files; read them at the start of every session and update them in the **same change** as the work they describe:
 
 - `tasks.md` — **the source of truth for what's pending** (open questions, things to verify, the unstarted implementation steps).
 - `sessions.md` — append-only **history of what's been done** (newest first). Add an entry before ending a session.
+- `mem/` — an **in-repo** folder of tracked markdown notes for anything durable that doesn't fit `tasks.md`/`sessions.md` (references, setup recipes, decisions-in-progress). The project-local stand-in for Claude memories — use it **instead of** `~/.claude`. (See `mem/README.md`.)
 
-Do not rely on memory tools for this project; write it to these files instead.
+Do not rely on the built-in memory tools for this project — write to these files/folders (which travel with the repo) instead.
 
 ## Intended layout (per `plan.md`)
 
