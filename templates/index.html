@@ -585,21 +585,31 @@
             try {
                 await fetch('/api/restart', { method: 'POST', headers: { 'Content-Type': 'application/json' } });
             } catch (e) { /* expected: the connection drops as the server goes down */ }
-            waitForServer(0);
+            waitForRestart();
         }
 
-        async function waitForServer(attempt) {
+        // Wait for the server to actually go DOWN (it exits ~0.5s after responding),
+        // THEN come back UP, before reloading. Polling immediately would otherwise see
+        // the still-alive process and reload prematurely, before the restart happens.
+        async function waitForRestart() {
             const sub = document.getElementById('restart-sub');
-            try {
-                const res = await fetch('/api/state', { cache: 'no-store' });
-                if (res.ok) { sub.textContent = 'Back online — reloading…'; setTimeout(() => location.reload(), 600); return; }
-            } catch (e) { /* still down */ }
-            if (attempt > 40) {
-                sub.textContent = 'Server did not come back within ~40s. If you launched it directly (not via run_hub.py), restart it manually, then reload this page.';
-                return;
+            let sawDown = false;
+            for (let i = 0; i < 70; i++) {  // ~35s budget
+                let up = false;
+                try { const r = await fetch('/api/state', { cache: 'no-store' }); up = r.ok; } catch (e) { up = false; }
+                if (!up) {
+                    sawDown = true;
+                    sub.textContent = 'Server is restarting…';
+                } else if (sawDown) {
+                    sub.textContent = 'Back online — reloading…';
+                    setTimeout(() => location.reload(), 600);
+                    return;
+                } else {
+                    sub.textContent = 'Waiting for the server to shut down…';
+                }
+                await new Promise(r => setTimeout(r, 500));
             }
-            sub.textContent = `Waiting for the server to come back online… (${attempt + 1}s)`;
-            setTimeout(() => waitForServer(attempt + 1), 1000);
+            sub.textContent = 'Server did not restart within ~35s. If you launched it directly (not via run_hub.py), restart it manually, then reload this page.';
         }
 
         // Loop
