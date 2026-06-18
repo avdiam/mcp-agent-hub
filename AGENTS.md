@@ -70,8 +70,9 @@ mcp-agent-hub/
 python -m venv venv && source venv/bin/activate   # Windows: venv\Scripts\Activate.ps1
 pip install -r requirements.txt
 
-# run (binds localhost only)
-uvicorn hub:app --port 8000 --host 127.0.0.1
+# run (binds localhost only, supports dashboard /api/restart)
+python run_hub.py
+# (Alternative: uvicorn hub:app --port 8000 --host 127.0.0.1 for simple/dev run without auto-restart)
 # dashboard: http://localhost:8000   |   MCP endpoint: http://localhost:8000/mcp
 
 # tests — both suites are isolated (test_db.py: tmp_path; test_mcp.py: temp DB, no

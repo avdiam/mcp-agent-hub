@@ -4,6 +4,7 @@ import json
 import logging
 from collections import deque
 from contextlib import asynccontextmanager
+import os
 
 from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse, JSONResponse
@@ -274,3 +275,17 @@ async def api_state():
 async def api_peek(agent_id: str):
     peek_res = await db.peek_inbox(DB_PATH, agent_id)
     return peek_res
+
+@app.post("/api/reset")
+async def api_reset():
+    cleared = len(activity_buffer)
+    activity_buffer.clear()
+    reclaimed = await db.reset_stuck(DB_PATH)
+    return {"ok": True, "cleared_events": cleared, "reclaimed_messages": reclaimed}
+
+@app.post("/api/restart")
+async def api_restart():
+    # Delay restart so response can flush
+    loop = asyncio.get_running_loop()
+    loop.call_later(0.5, lambda: os._exit(42))
+    return {"ok": True, "restarting": True}

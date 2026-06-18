@@ -112,3 +112,33 @@ async def test_mcp_tool_roundtrip():
     status = await check_status(msg_id)
     assert status["status"] == "completed"
     assert status["response"] == "done"
+
+@pytest.mark.asyncio
+async def test_api_reset(test_client):
+    await db.upsert_agent(hub.DB_PATH, "worker", "[]")
+    msg = await db.enqueue_message(hub.DB_PATH, "sender", "worker", "stuck_task")
+    await db.claim_pending(hub.DB_PATH, "worker", visibility_timeout=600)
+    
+    hub.activity_buffer.append({"test": "stuck"})
+    
+    res = await test_client.post("/api/reset", headers={"Origin": "http://localhost:8000"})
+    assert res.status_code == 200
+    data = res.json()
+    assert data["ok"] is True
+    assert data["reclaimed_messages"] == 1
+    assert data["cleared_events"] == 1
+    assert len(hub.activity_buffer) == 0
+    
+    status = await db.get_status(hub.DB_PATH, msg["message_id"])
+    assert status["status"] == "pending"
+    assert status["claimed_at"] is None
+
+@pytest.mark.asyncio
+async def test_api_recovery_middleware(test_client):
+    # Cross-site POST to /api/reset -> 403
+    res_reset = await test_client.post("/api/reset", headers={"Sec-Fetch-Site": "cross-site"})
+    assert res_reset.status_code == 403
+
+    # Cross-site POST to /api/restart -> 403 (Don't actually call a valid origin to avoid os._exit)
+    res_restart = await test_client.post("/api/restart", headers={"Sec-Fetch-Site": "cross-site"})
+    assert res_restart.status_code == 403

@@ -145,6 +145,17 @@ async def reclaim_stale(db_path, visibility_timeout=600):
         """, (cutoff,))
         await db.commit()
 
+async def reset_stuck(db_path):
+    async with aiosqlite.connect(db_path) as db:
+        cursor = await db.execute("""
+            UPDATE messages 
+            SET status = 'pending', claimed_at = NULL 
+            WHERE status = 'in_progress'
+        """)
+        rowcount = cursor.rowcount
+        await db.commit()
+        return rowcount
+
 async def request_input(db_path, message_id, question):
     async with aiosqlite.connect(db_path) as db:
         db.row_factory = aiosqlite.Row
