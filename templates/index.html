@@ -430,17 +430,17 @@
             // events is [timestamp, agent, tool, outcome] or similar dict. Wait, backend passes list of dicts.
             // Let's assume dict: {timestamp: time, agent: "...", tool: "...", outcome: "..."}
             events.slice().reverse().forEach(ev => {
-                const isErr = ev.outcome && ev.outcome.toLowerCase() === 'error';
+                const isErr = ev.outcome && ev.outcome.toLowerCase().startsWith('error');
                 const el = document.createElement('div');
                 el.className = `flex gap-3 text-xs p-2 rounded bg-white/5 border ${isErr ? 'border-red-500/20 text-red-300' : 'border-white/5 text-slate-300'} items-start`;
-                
+
                 el.innerHTML = `
                     <div class="font-mono text-[10px] text-slate-500 mt-0.5">${formatTime(ev.timestamp)}</div>
                     <div class="flex-grow">
-                        <span class="font-semibold text-white">${ev.agent || 'System'}</span> 
-                        <span class="text-slate-400">called</span> 
-                        <span class="font-mono text-primary-400">${ev.tool}</span>
-                        ${ev.outcome ? `<div class="mt-1 opacity-70 truncate max-w-xs">${ev.outcome}</div>` : ''}
+                        <span class="font-semibold text-white">${escapeHtml(ev.agent || 'System')}</span>
+                        <span class="text-slate-400">called</span>
+                        <span class="font-mono text-primary-400">${escapeHtml(ev.tool)}</span>
+                        ${ev.outcome ? `<div class="mt-1 opacity-70 truncate max-w-xs">${escapeHtml(ev.outcome)}</div>` : ''}
                     </div>
                 `;
                 container.appendChild(el);

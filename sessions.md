@@ -2,6 +2,55 @@
 
 > Append-only log of what was accomplished each session. Pairs with `tasks.md` (what's left). This project travels between two PCs and uses **no local Claude memories** — this file is the durable record. Newest session first.
 
+## 2026-06-18 — Security review + patches (dashboard XSS, Origin/Host hardening); browser-verified
+- Manual security review (the `/security-review` command needs the cwd to be the git repo; the driving session was rooted elsewhere, so reviewed `hub.py`/`db.py`/`templates/index.html` by hand). Threat model: malicious/compromised agent on a localhost, no-auth-by-design hub. Two findings fixed, split across both agents.
+- **🔴 HIGH — Stored XSS in `templates/index.html` (fixed by claude).** `renderAgents`/`renderMessages`/`renderEvents` interpolated agent-controlled fields (`agent id`/`description`, skill `name`/`description`, `sender_id`/`recipient_id`/`session_id`, event `agent`/`tool`/`outcome`) into `innerHTML` unescaped → a malicious `register_agent`/`send_message` could run script in the operator's browser, same-origin to the hub, and exfiltrate all `/api/state` data. Fix: added an `escapeHtml()` helper applied to every such field (the modal already used `textContent`), plus a defensive `Content-Security-Policy` meta (notably `connect-src 'self'`) and `object-src/base-uri 'none'`. **Browser-verified:** registered an agent whose id/description/skill carried `<img onerror>`/`<script>` payloads; the dashboard rendered them as inert escaped text (0 injected nodes, no script execution), Tailwind still loaded, no CSP violations.
+- **🟡 MEDIUM — Origin/Host validation in `hub.py` (fixed by agy, with a regression caught + corrected).** Original `OriginValidationMiddleware` used a substring `startswith` Origin check (matched `localhost.evil.com`), let missing-Origin requests through, and only guarded `/mcp` (not `/api/*`). agy hardened it: exact `urlparse` host check, `Host`-header validation (DNS-rebinding / CVE-2026-48710 "BadHost"), and coverage of `/api/*`. **Regression caught in browser review:** agy's first pass rejected *all* missing-Origin `/api/` requests, which 403'd the dashboard's own same-origin `fetch('/api/state')` (browsers omit `Origin` on same-origin GET; `fetch` can't set it — it's a forbidden header). Corrected to a `Sec-Fetch-Site` check (allow `same-origin`/`none`, block `cross-site`). **Verified:** dashboard same-origin GET + MCP clients → 200; evil Origin / spoofed Host / cross-site → 403; full `pytest` 10/10; dashboard renders in a real browser on the patched code.
+- **🟢 Accepted residuals (no code change):** no authn/ownership (any local client can register as any `agent_id`, drain any inbox, reply/fail/disconnect others' messages) — the v1 localhost trust model, covered by the v2 `caller_id`/auth item; no payload size cap (v2 retention); runtime CDN deps (mitigated by the new CSP). **✅ Clean:** no SQL injection (`db.py` fully parameterized).
+- **Files changed:** `templates/index.html` (XSS escaping + CSP, by claude); `hub.py` + `tests/test_mcp.py` (Origin/Host hardening + Sec-Fetch-Site + regression tests, by agy); `tasks.md`, `sessions.md` (this entry, by claude).
+- **Still open:** commit the security patches + doc refresh; then a round of dashboard UI changes (operator request); then v2 triage.
+
+## 2026-06-18 — Cross-agent E2E through the hub + D19 hook layer live (both clients); hook_peek bug fixed
+- **First real two-agent collaboration THROUGH the hub.** `claude-code-avdia` (Claude Code) and `antigravity-cli` (agy) both registered, discovered each other via `list_agents`, and ran the haiku demo end-to-end: `send_message` → `check_inbox` claim → `reply_to_message` → `result` fan-out to the sender's inbox. Step 6 E2E confirmed in both directions.
+- **D19 peek/nudge hook layer wired on both clients.** Claude Code: `Stop` + `UserPromptSubmit` → `python hook_peek.py --agent-id claude-code-avdia` (in `~/.claude/settings.json`). Antigravity (`~/.gemini/config/`):
+  ```json
+  // 1. config.json — enable json hooks:
+  { "jsonHooksEnabled": true }
+  // 2. hooks.json — define the hooks:
+  {
+    "PreInvocationHook": { "command": "python", "args": ["C:\\Users\\avdia\\Documents\\Projects\\mcp-agent-hub-agy\\hook_peek.py", "--agent-id", "antigravity-cli"] },
+    "StopHook":          { "command": "python", "args": ["C:\\Users\\avdia\\Documents\\Projects\\mcp-agent-hub-agy\\hook_peek.py", "--agent-id", "antigravity-cli"] }
+  }
+  ```
+- **Bug fixed in `hook_peek.py`.** It read `data.get("pending_count")` but `/api/peek` (`db.peek_inbox`) returns `count`, so the nudge never fired. Changed to `data.get("count", 0)`. Verified: nudge fires when a message is pending, silent when none.
+- **`test_mcp.py` made non-destructive (agy).** Previously it imported the live `DB_PATH="hub.db"` and `DELETE`d all rows on every run — wiping real hub state. Refactored to a `tmp_path` DB with `hub.DB_PATH` patched in the `setup_db` fixture. `pytest` now 10/10 green (independently re-run by claude: 10 passed in 2.00s), `hub.db` no longer clobbered.
+- **Coordination model.** Agreed a division of labor (claude drafts the shared doc diffs + gets agy sign-off before writing; agy owns its hook docs + the test refactor) and a completion sequence (green tests → `/security-review` → commit docs → v2 triage).
+- **Files changed:** `hook_peek.py` (bug fix, by agy); `tests/test_mcp.py` (temp-DB refactor, by agy); `AGENTS.md`, `tasks.md`, `sessions.md` (this refresh, by claude).
+- **Still open:** `/security-review` (Origin mw + localhost bind + no-auth), then commit the doc refresh; then v2 triage.
+
+## 2026-06-18 — Fixed FastMCP initialize error (-32602)
+- Discovered that the `INVALID_PARAMS` (-32602) error was caused by `mcp.shared.session.py` catching an exception from FastMCP middleware and blindly wrapping it as an `Invalid request parameters` error.
+- Fixed `ActivityTracker` middleware in `hub.py` by renaming `on_call_tool` to `__call__`, making it a valid callable for FastMCP's pipeline.
+- Removed custom body interception from `OriginValidationMiddleware` which was confusing the SSE response lifecycle.
+- Verified successful `initialize` handshake with `mcp-agent-hub` using a test client. The transport and server stack are fully operational.
+
+## 2026-06-18 — Built core hub, DB, Dashboard, FastMCP server, and Tests
+
+Executed Steps 1 through 5 of the Implementation Plan. The server is up and running.
+
+**Work Accomplished:**
+- **DB Layer (`db.py`)**: Implemented all logic using `aiosqlite` with WAL mode and atomic claim updates. Added sweeping for expired tasks.
+- **Dashboard (`index.html` & `hub.py`)**: Built a Tailwind CSS frontend that polls `/api/state` and renders online/offline status, queue lengths, message threads, and an Activity Feed.
+- **FastMCP Server (`hub.py`)**: Defined all 9 tools via `fastmcp`. Added `Origin` validation, `ActivityTracker` middleware, and fixed internal routing for `path="/"` and `transport="streamable-http"`.
+- **Tests (`tests/`)**: Fully implemented unit tests for the database logic and API tests (Origin, Peek, MCP round-trip simulation) using `pytest` and `httpx`.
+
+**Current State & Roadblocks:**
+- Step 6 (E2E testing) is partially started. The Antigravity CLI successfully targets `http://localhost:8000/mcp`, but encounters an error during the MCP initialize phase: `error: calling "initialize": Invalid request parameters`. This JSON-RPC error indicates FastMCP might be rejecting the initialize payload from the client. Debugging this is the next step.
+
+**Files changed:** `db.py`, `hub.py`, `templates/index.html`, `tests/test_db.py`, `tests/test_mcp.py`, `tasks.md`, `sessions.md` (this entry).
+
+**Still open:** Step 6 (E2E testing) and tracking down the `initialize` payload rejection.
+
 ## 2026-06-16 — Researched Zed's Agent Client Protocol (ACP); rejected as transport, recorded interop + validations
 
 User asked whether **Agent Client Protocol (ACP)** could be used directly, with our MCP server, or as inspiration — *before* building. Did primary-source research (zed.dev/acp, agentclientprotocol.com spec pages, LF AI blog). Still pre-implementation; no app code.

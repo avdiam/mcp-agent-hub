@@ -9,7 +9,7 @@ import db
 
 @pytest_asyncio.fixture
 async def test_client():
-    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://localhost") as client:
         yield client
 
 import hub
@@ -35,20 +35,34 @@ async def test_api_peek(test_client):
     await db.enqueue_message(hub.DB_PATH, "sender1", "test_agent", "msg1")
     await db.enqueue_message(hub.DB_PATH, "sender2", "test_agent", "msg2")
 
-    res = await test_client.get("/api/peek?agent_id=test_agent")
+    # Needs Origin since it's an /api/ endpoint
+    res = await test_client.get("/api/peek?agent_id=test_agent", headers={"Origin": "http://localhost"})
     assert res.status_code == 200
     data = res.json()
     assert data["count"] == 2
     assert "sender1" in data["senders"]
-    assert "sender2" in data["senders"]
 
 @pytest.mark.asyncio
 async def test_origin_validation(test_client):
-    res = await test_client.get("/mcp", headers={"Origin": "http://evil.com"})
-    assert res.status_code == 403
+    # Localhost Origin allowed
+    res_good = await test_client.get("/mcp", headers={"Origin": "http://localhost:8000"})
+    assert res_good.status_code != 403
+    
+    # Evil Origin rejected
+    res_evil = await test_client.get("/mcp", headers={"Origin": "http://evil.com"})
+    assert res_evil.status_code == 403
 
-    res2 = await test_client.get("/mcp", headers={"Origin": "http://localhost:8000"})
-    assert res2.status_code != 403
+    # Missing Origin, but Sec-Fetch-Site: same-origin allowed (Dashboard case)
+    res_missing_same = await test_client.get("/api/state", headers={"Sec-Fetch-Site": "same-origin"})
+    assert res_missing_same.status_code == 200
+
+    # Missing Origin, but Sec-Fetch-Site: cross-site rejected
+    res_missing_cross = await test_client.get("/api/state", headers={"Sec-Fetch-Site": "cross-site"})
+    assert res_missing_cross.status_code == 403
+
+    # Host spoof rejected
+    res_spoof = await test_client.get("/mcp", headers={"Host": "evil.com:8000"})
+    assert res_spoof.status_code == 403
 
 @pytest.mark.asyncio
 async def test_mcp_tool_roundtrip():

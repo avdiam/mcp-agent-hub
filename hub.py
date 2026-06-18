@@ -47,15 +47,31 @@ async def hub_lifespan(app: FastAPI):
     # Shutdown
     sweeper_task.cancel()
 
+from urllib.parse import urlparse
+
 # Origin Validation Middleware (D18)
 class OriginValidationMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
-        if request.url.path.startswith("/mcp"):
+        if request.url.path.startswith("/mcp") or request.url.path.startswith("/api/"):
+            # 1. Validate Host header to prevent DNS rebinding
+            host = request.headers.get("host", "")
+            host_name = host.split(":")[0]
+            if host_name not in ("localhost", "127.0.0.1"):
+                return JSONResponse({"detail": "Forbidden Host"}, status_code=403)
+
+            # 2. Validate Origin header
             origin = request.headers.get("origin")
             if origin:
-                # Allow localhost origins
-                if not (origin.startswith("http://localhost") or origin.startswith("http://127.0.0.1")):
+                parsed = urlparse(origin)
+                if parsed.hostname not in ("localhost", "127.0.0.1"):
                     return JSONResponse({"detail": "Forbidden Origin"}, status_code=403)
+            else:
+                # 3. If Origin is missing, use Sec-Fetch-Site to block cross-site requests
+                # (Browsers omit Origin on same-origin GET. MCP clients omit both, which is allowed)
+                sfs = request.headers.get("sec-fetch-site")
+                if sfs is not None and sfs not in ("same-origin", "none"):
+                    return JSONResponse({"detail": "Cross-site request blocked"}, status_code=403)
+                    
         return await call_next(request)
 
 

@@ -1,6 +1,6 @@
 # CLAUDE.md
 
-Guidance for Claude Code when working in the **MCP Agent Hub** project.
+Guidance for AGY when working in the **MCP Agent Hub** project.
 
 > **Override notice.** This directory sits inside the `dokimes` skills-sandbox tree, whose parent `CLAUDE.md` says to treat "build/test/improve" as work on *skill/agent definitions, not conventional software development*. That does **not** apply here. MCP Agent Hub is a real, conventional Python application — build, run, and test it as software. This file takes precedence for anything under `mcp-agent-hub/`.
 
@@ -13,9 +13,11 @@ MCP Agent Hub is a **lightweight local message broker that lets independent CLI 
 
 Messages are persisted in SQLite so work survives restarts.
 
-## Current status: pre-implementation
+## Current status: v1 feature-complete (2026-06-18)
 
-There is **no code yet** — only design docs. They are the source of truth; read them before writing code:
+The application is implemented and running. Steps 1–5 of `plan.md` are done (`db.py`, `hub.py`, dashboard, tests). The FastMCP `initialize` -32602 bug is fixed (`ActivityTracker.__call__`). Step 6 E2E is verified: a full cross-agent haiku exchange ran through the hub (`claude-code-avdia` ↔ `antigravity-cli`), and the D19 peek/nudge hook layer is live on **both** clients (Claude Code `Stop`/`UserPromptSubmit`; agy `PreInvocationHook`/`StopHook`). Remaining before tagging v1: a green `pytest` (done — 10/10, after `test_mcp.py` was made non-destructive) and a `/security-review`.
+
+The design docs remain the source of truth for *why*; read them before changing behavior:
 
 - `project-purpose.md` — the problem and goals.
 - `specs.md` — system components, the 9 MCP tools, dashboard, and storage schema.
@@ -35,7 +37,7 @@ All preserved state lives in checked-in files; read them at the start of every s
 
 Do not rely on the built-in memory tools for this project — write to these files/folders (which travel with the repo) instead.
 
-## Intended layout (per `plan.md`)
+## Layout (actual)
 
 ```text
 mcp-agent-hub/
@@ -44,10 +46,14 @@ mcp-agent-hub/
 ├── hook_peek.py      # optional client hook: peeks /api/peek to nudge an agent (D19)
 ├── templates/
 │   └── index.html    # dashboard (Jinja2 + Tailwind via CDN)
-├── tests/            # db unit tests + scripted MCP smoke test
-├── requirements.txt  # pinned deps
+├── tests/            # test_db.py (tmp_path) + test_mcp.py (temp-DB, non-destructive)
+├── requirements.txt          # pinned deps
+├── requirements-frozen.txt   # exact pins from pip freeze (Step 1 residual, now done)
+├── debug_mcp.py, debug_mcp_lowlevel.py, validate.py  # transport/initialize debugging helpers
+├── mem/              # in-repo durable notes (travels with git)
 └── *.md              # the design docs above
 ```
+*(`hub.db`, `*.log` are runtime artifacts and gitignored.)*
 
 ## Tech stack
 
@@ -57,7 +63,7 @@ mcp-agent-hub/
 - SQLite3 in WAL mode
 - Jinja2 + Tailwind (CDN), vanilla JS polling `/api/state`
 
-## Commands (once code exists)
+## Commands
 
 ```bash
 # setup
@@ -68,8 +74,31 @@ pip install -r requirements.txt
 uvicorn hub:app --port 8000 --host 127.0.0.1
 # dashboard: http://localhost:8000   |   MCP endpoint: http://localhost:8000/mcp
 
-# tests
+# tests — both suites are isolated (test_db.py: tmp_path; test_mcp.py: temp DB, no
+# longer DELETEs the live hub.db). Run a single test:
 pytest
+pytest tests/test_mcp.py -k test_api_peek
+```
+
+## D19 hook layer (peek-nudge), per-client config
+
+Both clients run `hook_peek.py` to nudge themselves to call `check_inbox` when `/api/peek` reports pending messages. Claude Code wires it via `~/.claude/settings.json` (`Stop` + `UserPromptSubmit` → `python …/hook_peek.py --agent-id claude-code-avdia`). Antigravity wires it via `~/.gemini/config/`:
+
+```json
+// 1. ~/.gemini/config/config.json — enable json hooks:
+{ "jsonHooksEnabled": true }
+
+// 2. ~/.gemini/config/hooks.json — define the hooks:
+{
+  "PreInvocationHook": {
+    "command": "python",
+    "args": ["C:\\Users\\avdia\\Documents\\Projects\\mcp-agent-hub-agy\\hook_peek.py", "--agent-id", "antigravity-cli"]
+  },
+  "StopHook": {
+    "command": "python",
+    "args": ["C:\\Users\\avdia\\Documents\\Projects\\mcp-agent-hub-agy\\hook_peek.py", "--agent-id", "antigravity-cli"]
+  }
+}
 ```
 
 ## Conventions
