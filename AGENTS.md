@@ -58,7 +58,7 @@ mcp-agent-hub/
 ├── requirements.txt          # pinned deps
 └── requirements-frozen.txt   # exact pins
 ```
-*(`hub.db`, `*.log` are runtime artifacts and gitignored.)*
+*(`hub.db`, `logs/hub.log`, and other root `*.log` files are runtime artifacts and gitignored.)*
 
 ## Tech stack
 
