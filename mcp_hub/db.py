@@ -1,3 +1,4 @@
+from contextlib import asynccontextmanager
 import sqlite3
 import aiosqlite
 import json
@@ -7,8 +8,20 @@ import uuid
 if sqlite3.sqlite_version_info < (3, 35):
     raise RuntimeError(f"SQLite >= 3.35 is required. Found: {sqlite3.sqlite_version}")
 
+
+@asynccontextmanager
+async def _connect(db_path):
+    conn = await aiosqlite.connect(db_path)
+    try:
+        await conn.execute("PRAGMA busy_timeout=5000")
+        await conn.execute("PRAGMA synchronous=NORMAL")
+        conn.row_factory = aiosqlite.Row
+        yield conn
+    finally:
+        await conn.close()
+
 async def init_db(db_path="hub.db"):
-    async with aiosqlite.connect(db_path) as db:
+    async with _connect(db_path) as db:
         await db.execute("PRAGMA journal_mode=WAL")
         await db.execute("PRAGMA synchronous=NORMAL")
         await db.execute("PRAGMA busy_timeout=5000")
@@ -49,7 +62,7 @@ async def init_db(db_path="hub.db"):
         await db.commit()
 
 async def upsert_agent(db_path, agent_id, skills_json, description=None):
-    async with aiosqlite.connect(db_path) as db:
+    async with _connect(db_path) as db:
         await db.execute("""
             INSERT INTO agents (id, description, skills, status, last_seen)
             VALUES (?, ?, ?, 'online', ?)
@@ -62,19 +75,18 @@ async def upsert_agent(db_path, agent_id, skills_json, description=None):
         await db.commit()
 
 async def get_all_agents(db_path):
-    async with aiosqlite.connect(db_path) as db:
-        db.row_factory = aiosqlite.Row
+    async with _connect(db_path) as db:
         async with db.execute("SELECT * FROM agents") as cursor:
             rows = await cursor.fetchall()
             return [dict(row) for row in rows]
 
 async def set_agent_offline(db_path, agent_id):
-    async with aiosqlite.connect(db_path) as db:
+    async with _connect(db_path) as db:
         await db.execute("UPDATE agents SET status='offline' WHERE id=?", (agent_id,))
         await db.commit()
 
 async def touch_last_seen(db_path, agent_id):
-    async with aiosqlite.connect(db_path) as db:
+    async with _connect(db_path) as db:
         await db.execute("UPDATE agents SET last_seen=? WHERE id=?", (time.time(), agent_id))
         await db.commit()
 
@@ -83,8 +95,7 @@ async def enqueue_message(db_path, sender_id, recipient_id, payload, context=Non
     if not session_id:
         session_id = str(uuid.uuid4())
         
-    async with aiosqlite.connect(db_path) as db:
-        db.row_factory = aiosqlite.Row
+    async with _connect(db_path) as db:
         async with db.execute("SELECT status, last_seen FROM agents WHERE id=?", (recipient_id,)) as cursor:
             row = await cursor.fetchone()
             if not row:
@@ -108,8 +119,7 @@ async def enqueue_message(db_path, sender_id, recipient_id, payload, context=Non
     return {"message_id": message_id, "session_id": session_id}
 
 async def claim_pending(db_path, agent_id, visibility_timeout=600):
-    async with aiosqlite.connect(db_path) as db:
-        db.row_factory = aiosqlite.Row
+    async with _connect(db_path) as db:
         now = time.time()
         cutoff = now - visibility_timeout
         
@@ -135,7 +145,7 @@ async def claim_pending(db_path, agent_id, visibility_timeout=600):
         return claimed
 
 async def reclaim_stale(db_path, visibility_timeout=600):
-    async with aiosqlite.connect(db_path) as db:
+    async with _connect(db_path) as db:
         now = time.time()
         cutoff = now - visibility_timeout
         await db.execute("""
@@ -146,7 +156,7 @@ async def reclaim_stale(db_path, visibility_timeout=600):
         await db.commit()
 
 async def reset_stuck(db_path):
-    async with aiosqlite.connect(db_path) as db:
+    async with _connect(db_path) as db:
         cursor = await db.execute("""
             UPDATE messages 
             SET status = 'pending', claimed_at = NULL 
@@ -157,8 +167,7 @@ async def reset_stuck(db_path):
         return rowcount
 
 async def request_input(db_path, message_id, question):
-    async with aiosqlite.connect(db_path) as db:
-        db.row_factory = aiosqlite.Row
+    async with _connect(db_path) as db:
         async with db.execute("SELECT session_id, sender_id, recipient_id FROM messages WHERE id=?", (message_id,)) as cursor:
             row = await cursor.fetchone()
             if not row:
@@ -180,8 +189,7 @@ async def request_input(db_path, message_id, question):
     return {"request_message_id": res["message_id"], "session_id": res["session_id"]}
 
 async def complete_message(db_path, message_id, response):
-    async with aiosqlite.connect(db_path) as db:
-        db.row_factory = aiosqlite.Row
+    async with _connect(db_path) as db:
         now = time.time()
         await db.execute("UPDATE messages SET status='completed', response=?, updated_at=? WHERE id=?", (response, now, message_id))
         
@@ -211,14 +219,13 @@ async def complete_message(db_path, message_id, response):
         )
 
 async def fail_message(db_path, message_id, error):
-    async with aiosqlite.connect(db_path) as db:
+    async with _connect(db_path) as db:
         now = time.time()
         await db.execute("UPDATE messages SET status='failed', response=?, updated_at=? WHERE id=?", (error, now, message_id))
         await db.commit()
 
 async def get_status(db_path, message_id):
-    async with aiosqlite.connect(db_path) as db:
-        db.row_factory = aiosqlite.Row
+    async with _connect(db_path) as db:
         async with db.execute("SELECT * FROM messages WHERE id=?", (message_id,)) as cursor:
             row = await cursor.fetchone()
             if not row:
@@ -226,8 +233,7 @@ async def get_status(db_path, message_id):
             return dict(row)
 
 async def peek_inbox(db_path, agent_id):
-    async with aiosqlite.connect(db_path) as db:
-        db.row_factory = aiosqlite.Row
+    async with _connect(db_path) as db:
         now = time.time()
         cutoff = now - 600 # default visibility_timeout
         
@@ -244,7 +250,7 @@ async def peek_inbox(db_path, agent_id):
             return {"count": len(rows), "senders": senders}
 
 async def expire_messages(db_path, message_ttl=86400):
-    async with aiosqlite.connect(db_path) as db:
+    async with _connect(db_path) as db:
         now = time.time()
         cutoff = now - message_ttl
         await db.execute("""
@@ -255,14 +261,13 @@ async def expire_messages(db_path, message_ttl=86400):
         await db.commit()
 
 async def get_recent_messages(db_path, limit=100):
-    async with aiosqlite.connect(db_path) as db:
-        db.row_factory = aiosqlite.Row
+    async with _connect(db_path) as db:
         async with db.execute("SELECT * FROM messages ORDER BY created_at DESC LIMIT ?", (limit,)) as cursor:
             rows = await cursor.fetchall()
             return [dict(row) for row in rows]
 
 async def get_stats(db_path):
-    async with aiosqlite.connect(db_path) as db:
+    async with _connect(db_path) as db:
         async with db.execute("SELECT COUNT(*) FROM messages") as cursor:
             row = await cursor.fetchone()
             total_messages = row[0]
