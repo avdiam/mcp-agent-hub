@@ -4,6 +4,18 @@
 
 > **▶ START HERE (next session).** v1 is **shipped, security-reviewed, committed, and reconciled.** Steps 1–6 done; **recovery controls (D26)** + **repo restructure (D27)** + log consolidation landed and verified (commits `a9b6e66` security, `ff331ca`/`acc9e61` recovery, `1e7e8da` restructure, `ae99028` logs; `pytest` 12/12). App code now lives in `mcp_hub/`; run with `python run_hub.py`. **Next actions:** (1) finish the `README.md` install fixes (Claude Code `claude mcp add --transport http …` + Desktop bridge — agy); (2) clean leftover `test-agent`/`test_agent` registry rows; (3) confirm/retire the Step 5.2 Inspector CLI smoke check; (4) pick which v2 items to pull forward (see "Possible future / v2"). Skim the newest `sessions.md` entry first.
 
+## Roadmap / Product Direction (set 2026-06-18)
+
+The hub stays **single-user / many local agents** for the **short + mid term**. **Multi-user + networked** is an explicit **long-horizon** goal — *design new work to stay compatible* with a future `caller_id`/auth model (D11/D23 v2), but **don't build auth/networking yet**. Open-sourcing the code (Option D, see Distribution) is orthogonal to networking the runtime: we publish **as one-user/localhost first**, with the multi/network path on the horizon.
+
+**Short/mid-term workstreams (before publishing):**
+1. **Stress-test & stabilize** — concurrency/load on the `check_inbox` long-poll + atomic claim (N waiters, no double-delivery), visibility-timeout redelivery under simulated crash, WAL behaviour under many writers, large/many messages, dashboard `/api/state` perf. Build a repeatable load harness.
+2. **Web dashboard — more interactive & useful** — operator actions from the UI (send / requeue / expire / disconnect), session-thread conversation view, filter/search, richer activity + metrics; consider SSE/WebSocket push to replace the 2 s poll.
+3. **New features** — pull forward high-value items that don't need networking (e.g. typed `stop_reason`/fail-category enum, clarification cancel/reject `outcome`, message search/labels, priorities/broadcast — to be scoped).
+4. **Dogfood** — use the hub to coordinate our own work with additional **specialist agents** (beyond `claude-code-avdia` + `antigravity-cli`).
+
+**Then:** publish to GitHub as **one-user/localhost** (Option D, source distribution), trust model clearly documented, with the multi-user/networked evolution stated as the roadmap.
+
 ## Design questions — ALL RESOLVED (as of 2026-06-15)
 - [x] **Q1 / D2 — Delivery model.** RESOLVED (2026-06-15) → **D2 (confirmed) + D19**: long-poll `check_inbox` stays primary (`wait=True` default; `wait=False` for one-off checks); **added an optional hook peek/nudge layer** — read-only `/api/peek` + a shipped `hook_peek.py` (Claude Code `Stop`/`UserPromptSubmit`; agy `StopHook`/`PreInvocationHook`). The hook **peeks, never claims**, so at-least-once is preserved. agy's hook system verified from the `agy.exe` binary.
 - [x] **Q3 / D6 — Send-to-stale policy.** RESOLVED (2026-06-15) → **D6 (extended)**: explicit `disconnect` blocks new sends; mere staleness still queues (+`flagged_stale`); **plus** a `pending` message unclaimed past `MESSAGE_TTL` (24h) is swept to a new terminal **`expired`** state (distinct from `failed`).
