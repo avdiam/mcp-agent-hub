@@ -11,6 +11,7 @@ Started the server under the supervisor, configured the workspace, and validated
 - **Successful Agent Registration:** Registered the `antigravity-cli` agent with its skills and successfully queried the list of registered agents, verifying that the server dynamically updates statuses to `online`.
 - **Statusline Enhancements:** Updated `.claude/statusline.py` to extract plan usage (`rate_limits.five_hour` or `rate_limits.seven_day`) and render a sleek, color-coded visual indicator showing plan usage next to context usage.
 - **CLI Settings Fix:** Identified that the Antigravity CLI config in `C:\Users\30697\.gemini\antigravity-cli\settings.json` had its `statusLine.command` incorrectly set to `"configure"`. Updated it to point to our project's statusline script: `python C:/Users/30697/Documents/Projects/mcp-agent-hub-agy/.claude/statusline.py`.
+- **E2E Browser Automation Setup (Option 1):** Installed `playwright` python package in the virtual environment and ran `playwright install chromium`. Created [scripts/test_dashboard_e2e.py](file:///C:/Users/30697/Documents/Projects/mcp-agent-hub-agy/scripts/test_dashboard_e2e.py) to launch a headless browser, verify page load, assert that `antigravity-cli` appears online in the registry table, and save page screenshots to the artifacts folder.
 
 ## 2026-06-18 — Polish & v1 Closing Tasks Complete
 
