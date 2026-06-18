@@ -52,6 +52,18 @@ def main():
         ctx += f" {DIM}{k(used)}/{k(size)}{RESET}"
     parts.append(ctx)
 
+    # Add Plan usage (five_hour or seven_day rate limits)
+    rl = data.get("rate_limits") or {}
+    plan_info = rl.get("five_hour") or rl.get("seven_day") or {}
+    plan_pct = plan_info.get("used_percentage")
+    if plan_pct is not None:
+        plan_pct_val = int(plan_pct)
+        plan_color = RED if plan_pct_val >= 80 else YELLOW if plan_pct_val >= 50 else GREEN
+        plan_filled = max(0, min(width, round(plan_pct_val / 100 * width)))
+        plan_bar = "█" * plan_filled + "░" * (width - plan_filled)
+        plan_str = f"{DIM}plan{RESET} {plan_color}{plan_bar} {plan_pct_val}%{RESET}"
+        parts.append(plan_str)
+
     print(sep.join(parts))
 
 

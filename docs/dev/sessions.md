@@ -9,6 +9,7 @@ Started the server under the supervisor, configured the workspace, and validated
 - **Client Configuration Check:** Confirmed that the global configuration file at `C:\Users\30697\.gemini\antigravity-cli\mcp_config.json` correctly points to the hub server (`http://localhost:8000/mcp`).
 - **MCP Client Handshake & Tool Call:** Wrote and executed `scripts/register_self.py` to simulate the full JSON-RPC handshake over the Streamable HTTP transport (requiring `application/json, text/event-stream` and session ID routing).
 - **Successful Agent Registration:** Registered the `antigravity-cli` agent with its skills and successfully queried the list of registered agents, verifying that the server dynamically updates statuses to `online`.
+- **Statusline Enhancements:** Updated `.claude/statusline.py` to extract plan usage (`rate_limits.five_hour` or `rate_limits.seven_day`) and render a sleek, color-coded visual indicator showing plan usage next to context usage.
 
 ## 2026-06-18 — Polish & v1 Closing Tasks Complete
 
