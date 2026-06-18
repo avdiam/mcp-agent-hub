@@ -787,15 +787,20 @@
             document.getElementById('act-tool').textContent = ev.tool || 'unknown';
             document.getElementById('act-msgid').textContent = ev.message_id || '—';
 
+            // Backend sends `arg_summary` (truncated string); tolerate `args` too.
             const argsCont = document.getElementById('act-args-container');
-            if (ev.args !== undefined && ev.args !== null && (typeof ev.args !== 'object' || Object.keys(ev.args).length)) {
+            const argsVal = ev.arg_summary ?? ev.args;
+            const argsEmpty = argsVal === undefined || argsVal === null || String(argsVal) === '{}' ||
+                (typeof argsVal === 'object' && !Object.keys(argsVal).length);
+            if (!argsEmpty) {
                 argsCont.classList.remove('hidden');
-                document.getElementById('act-args').textContent = typeof ev.args === 'string' ? ev.args : JSON.stringify(ev.args, null, 2);
+                document.getElementById('act-args').textContent = typeof argsVal === 'string' ? argsVal : JSON.stringify(argsVal, null, 2);
             } else argsCont.classList.add('hidden');
 
+            // Outcome: prefer the full `error` detail (with traceback) when present.
             const outEl = document.getElementById('act-outcome');
-            const isErr = ev.outcome && ev.outcome.toLowerCase().startsWith('error');
-            outEl.textContent = ev.outcome || '(none)';
+            const isErr = (ev.outcome && ev.outcome.toLowerCase().startsWith('error')) || !!ev.error;
+            outEl.textContent = ev.error || ev.outcome || '(none)';
             outEl.className = `font-mono text-xs whitespace-pre-wrap overflow-x-auto ${isErr ? 'text-red-300' : 'text-emerald-300'}`;
 
             actBackdrop.classList.remove('hidden');
@@ -896,7 +901,7 @@
                 const res = await fetch('/api/purge', { method: 'POST', headers: { 'Content-Type': 'application/json' } });
                 if (!res.ok) throw new Error('HTTP ' + res.status);
                 const data = await res.json();
-                showToast(`Purged ${data.deleted ?? 0} old message(s).`);
+                showToast(`Purged ${data.purged_messages ?? data.deleted ?? 0} old message(s).`);
                 fetchState();
             } catch (e) {
                 showToast(`Purge failed (${e.message}). Endpoint may not be deployed yet.`);
