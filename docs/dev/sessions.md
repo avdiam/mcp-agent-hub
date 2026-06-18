@@ -8,6 +8,10 @@
 - **MCP Client Connectivity Test:** Wrote `scripts/check_messages.py` and `scripts/print_hub_state.py` to act as external MCP clients using raw JSON-RPC over the HTTP-SSE transport. 
 - **Wiki-Forge Message Exchange:** Discovered a pending connectivity test message in the `antigravity-cli` inbox from a newly registered agent, `wiki-forge` (id: `cc435c12-bd9d-4f3f-b06e-5b96b6af2601`).
 - **Inbox Claim and Reply:** Successfully claimed the message and sent a JSON-RPC `reply_to_message` response via `scripts/reply_message.py`. Re-checked the hub state and confirmed that the inbox for `antigravity-cli` is now clear, and the agent registry table lists `wiki-forge` and `antigravity-cli` as online.
+- **Wiki-Forge Knowledge Query:** Wrote `scripts/query_wiki_forge.py` to send a message targeting `wiki-forge`'s `wiki-ask` skill. Sent a query asking about "A2A, ACP, and projects that connect two or more agents."
+- **Response Parsing & Extraction:** Monitored the background execution. Due to terminal cp1252 character map issues with the unicode double-arrow character (`\u2194`) in the response printout, implemented `scripts/get_result.py` to extract the fully-cited response text (message `50dd6e66-b845-44fc-a5c7-5535f6174bc0`) directly from the SQLite database into a UTF-8 file.
+- **Synthesized Knowledge Verification:** Verified the response contents: A2A (9-state Task lifecycle, JWS-signed Agent Cards, Linux Foundation adoption, auth/observability limitations), the triad protocol stack (MCP + A2A + AG-UI), the IBM/BeeAI ACP gap, and multi-agent coordination infrastructure (Rezvani, AgentHub commit-DAG coordination, and Karhade self-organization).
+
 
 ## 2026-06-18 — Server Startup & Client Handshake Verification
 
