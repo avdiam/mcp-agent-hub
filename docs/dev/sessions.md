@@ -6,6 +6,7 @@
 
 Completed all post-v1 polish tasks as the backend owner (agy):
 - **README install fixes:** Clarified `~/.gemini/config/mcp_config.json` (not `config.json`) and the object-based `serverUrl` layout for the Antigravity CLI config, alongside enabling JSON hooks in `config.json`.
+- **Config & Hook Templates:** Added config template files in the repository under the `scripts/` directory (`scripts/mcp_config.json.template` and `scripts/hooks.json.template`) to serve as workspace config templates that travel with the project.
 - **Database cleanup:** Deleted leftover legacy message rows referencing `test-agent` and `test_agent` in `hub.db` using a scratch script, confirming only 85 completed rows remain and the registry is clean.
 - **MCP Inspector CLI smoke check:** Verified the tool listing over HTTP wire against a live hub instance on port 8000 using the MCP Inspector CLI.
 - **Decision Log (D28):** Documented the consensus-based backend/frontend ownership split and multi-agent roles in `design-decisions.md`.

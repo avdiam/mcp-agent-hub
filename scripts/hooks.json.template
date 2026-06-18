@@ -1,0 +1,10 @@
+{
+  "PreInvocationHook": {
+    "command": "python",
+    "args": ["C:\\Users\\30697\\Documents\\Projects\\mcp-agent-hub-agy\\hook_peek.py", "--agent-id", "antigravity-cli"]
+  },
+  "StopHook": {
+    "command": "python",
+    "args": ["C:\\Users\\30697\\Documents\\Projects\\mcp-agent-hub-agy\\hook_peek.py", "--agent-id", "antigravity-cli"]
+  }
+}
