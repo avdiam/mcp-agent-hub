@@ -87,7 +87,7 @@ Encapsulates all SQLite interactions; called by both the FastAPI routes (to read
 * `fail_message(id, error)`, `get_status(message_id)` (surfaces the pending `question` when `input_required`)
 
 ### 3. Transport Layer Protocol
-The server uses the **Streamable HTTP** transport (MCP `2025-03-26`+) via a single endpoint:
+The server uses the **Streamable HTTP** transport (introduced MCP `2025-03-26`; current stable `2025-06-18`) via a single endpoint:
 * `POST/GET /mcp`: agents POST JSON-RPC tool calls; the server may upgrade to an SSE stream for long-running calls (e.g. a long-polling `check_inbox`).
 
 The legacy HTTP+SSE transport (`GET /sse` + `POST /messages`) is deprecated and intentionally not implemented. **Confirm both Claude Code and Antigravity speak Streamable HTTP** before relying on this in the test plan.

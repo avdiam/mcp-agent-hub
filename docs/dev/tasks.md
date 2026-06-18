@@ -52,6 +52,9 @@ Build in **phases** (D25): **P1** skeleton + green haiku E2E → **P2** skills/`
   - [x] 2026-06-18: **repo restructure (D27)** — `mcp_hub/` package, `docs/dev/`, `scripts/`, root `README.md`; run via `python run_hub.py` (`uvicorn mcp_hub.hub:app`). Logs consolidated to `logs/hub.log`. Commits `1e7e8da`/`ae99028`. Re-verified live (imports, templates path, restart-from-root, dashboard renders, 403s hold).
   - [ ] **Remaining:** README install fixes (agy); `test-agent`/`test_agent` registry cleanup; confirm/retire the Inspector CLI smoke check; v2 triage.
 
+## Distribution (future)
+- [ ] **Publish as a public open-source GitHub repo (Option D: Open Source)** — distribute by source so developers verify the code directly; **not** a PyPI package or Docker image. Deferred: extend + stabilize the system first before publishing. *(Operator direction relayed via `antigravity-cli`, 2026-06-18.)*
+
 ## Possible future / v2 (deferred)
 - [ ] Optional auth (FastMCP `TokenVerifier` / static bearer token) + a **uniform `caller_id`** arg for per-tool identity/ownership enforcement (D23/D11) — keep `127.0.0.1` binding regardless.
 - [ ] Expire parked **`input_required`** tasks whose clarification is never answered, and **cascade-expire** a stalled clarification's whole exchange (v1 excludes `input_request`/`result` from the `MESSAGE_TTL` sweep — D6/Q3/D24).

@@ -2,10 +2,10 @@
 
 ## 1. System Components
 The system consists of two interfaces served from a single Python application:
-1. **MCP Server Interface (Streamable HTTP):** For local CLI agents to connect to. A single endpoint (`/mcp`) per the MCP `2025-03-26`+ transport revision.
+1. **MCP Server Interface (Streamable HTTP):** For local CLI agents to connect to. A single endpoint (`/mcp`) per the Streamable HTTP transport (introduced MCP rev `2025-03-26`; current stable is `2025-06-18`, with `2025-11-25` published).
 2. **Web Dashboard (HTTP):** A browser-based UI for developers to monitor the hub.
 
-> **Transport note:** The legacy HTTP+SSE transport (a `GET /sse` stream + a separate `POST /messages` endpoint) was deprecated in MCP spec revision `2025-03-26` and is **not** implemented here. We use Streamable HTTP, which most current clients and FastMCP support natively. Both target clients consume it: Claude Code via `"type": "http"` in `.mcp.json`, and Antigravity (the `agy` CLI) via the `serverUrl` key in `~/.gemini/config/mcp_config.json` (**verified live 2026-06-15** — the AGY CLI completed a full MCP handshake against a `http://localhost` Streamable-HTTP endpoint this way). See `design-decisions.md` (D1/Q4).
+> **Transport note:** The legacy HTTP+SSE transport (a `GET /sse` stream + a separate `POST /messages` endpoint) was deprecated in MCP spec revision `2025-03-26` (current stable `2025-06-18`) and is **not** implemented here. We use Streamable HTTP, which most current clients and FastMCP support natively. Both target clients consume it: Claude Code via `"type": "http"` in `.mcp.json`, and Antigravity (the `agy` CLI) via the `serverUrl` key in `~/.gemini/config/mcp_config.json` (**verified live 2026-06-15** — the AGY CLI completed a full MCP handshake against a `http://localhost` Streamable-HTTP endpoint this way). See `design-decisions.md` (D1/Q4).
 >
 > **Origin validation (D18):** in addition to binding `127.0.0.1`, the server validates the HTTP `Origin` header on `/mcp` requests — the MCP spec mandates this as a DNS-rebinding defense. Requests with no `Origin` (non-browser CLI clients) pass; requests bearing a non-localhost `Origin` are rejected.
 
