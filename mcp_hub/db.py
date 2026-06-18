@@ -1,3 +1,5 @@
+import asyncio
+from functools import wraps
 from contextlib import asynccontextmanager
 import sqlite3
 import aiosqlite
@@ -8,6 +10,22 @@ import uuid
 if sqlite3.sqlite_version_info < (3, 35):
     raise RuntimeError(f"SQLite >= 3.35 is required. Found: {sqlite3.sqlite_version}")
 
+
+
+def retry_on_lock(retries=5, backoff=0.01):
+    def decorator(func):
+        @wraps(func)
+        async def wrapper(*args, **kwargs):
+            for attempt in range(retries):
+                try:
+                    return await func(*args, **kwargs)
+                except sqlite3.OperationalError as e:
+                    if "database is locked" in str(e) and attempt < retries - 1:
+                        await asyncio.sleep(backoff * (2 ** attempt))
+                    else:
+                        raise
+        return wrapper
+    return decorator
 
 @asynccontextmanager
 async def _connect(db_path):
@@ -20,6 +38,7 @@ async def _connect(db_path):
     finally:
         await conn.close()
 
+@retry_on_lock()
 async def init_db(db_path="hub.db"):
     async with _connect(db_path) as db:
         await db.execute("PRAGMA journal_mode=WAL")
@@ -61,6 +80,7 @@ async def init_db(db_path="hub.db"):
         
         await db.commit()
 
+@retry_on_lock()
 async def upsert_agent(db_path, agent_id, skills_json, description=None):
     async with _connect(db_path) as db:
         await db.execute("""
@@ -74,22 +94,26 @@ async def upsert_agent(db_path, agent_id, skills_json, description=None):
         """, (agent_id, description, skills_json, time.time()))
         await db.commit()
 
+@retry_on_lock()
 async def get_all_agents(db_path):
     async with _connect(db_path) as db:
         async with db.execute("SELECT * FROM agents") as cursor:
             rows = await cursor.fetchall()
             return [dict(row) for row in rows]
 
+@retry_on_lock()
 async def set_agent_offline(db_path, agent_id):
     async with _connect(db_path) as db:
         await db.execute("UPDATE agents SET status='offline' WHERE id=?", (agent_id,))
         await db.commit()
 
+@retry_on_lock()
 async def touch_last_seen(db_path, agent_id):
     async with _connect(db_path) as db:
         await db.execute("UPDATE agents SET last_seen=? WHERE id=?", (time.time(), agent_id))
         await db.commit()
 
+@retry_on_lock()
 async def enqueue_message(db_path, sender_id, recipient_id, payload, context=None, session_id=None, parent_id=None, kind="task", response=None):
     message_id = str(uuid.uuid4())
     if not session_id:
@@ -118,6 +142,7 @@ async def enqueue_message(db_path, sender_id, recipient_id, payload, context=Non
     
     return {"message_id": message_id, "session_id": session_id}
 
+@retry_on_lock()
 async def claim_pending(db_path, agent_id, visibility_timeout=600):
     async with _connect(db_path) as db:
         now = time.time()
@@ -144,6 +169,7 @@ async def claim_pending(db_path, agent_id, visibility_timeout=600):
         await db.commit()
         return claimed
 
+@retry_on_lock()
 async def reclaim_stale(db_path, visibility_timeout=600):
     async with _connect(db_path) as db:
         now = time.time()
@@ -155,6 +181,7 @@ async def reclaim_stale(db_path, visibility_timeout=600):
         """, (cutoff,))
         await db.commit()
 
+@retry_on_lock()
 async def reset_stuck(db_path):
     async with _connect(db_path) as db:
         cursor = await db.execute("""
@@ -166,6 +193,7 @@ async def reset_stuck(db_path):
         await db.commit()
         return rowcount
 
+@retry_on_lock()
 async def request_input(db_path, message_id, question):
     async with _connect(db_path) as db:
         async with db.execute("SELECT session_id, sender_id, recipient_id FROM messages WHERE id=?", (message_id,)) as cursor:
@@ -188,6 +216,7 @@ async def request_input(db_path, message_id, question):
     )
     return {"request_message_id": res["message_id"], "session_id": res["session_id"]}
 
+@retry_on_lock()
 async def complete_message(db_path, message_id, response):
     async with _connect(db_path) as db:
         async with db.execute("SELECT session_id, parent_id, kind, sender_id, recipient_id FROM messages WHERE id=?", (message_id,)) as cursor:
@@ -220,6 +249,7 @@ async def complete_message(db_path, message_id, response):
             kind="result"
         )
 
+@retry_on_lock()
 async def fail_message(db_path, message_id, error):
     async with _connect(db_path) as db:
         now = time.time()
@@ -228,6 +258,7 @@ async def fail_message(db_path, message_id, error):
             raise ValueError("Message not found")
         await db.commit()
 
+@retry_on_lock()
 async def get_status(db_path, message_id):
     async with _connect(db_path) as db:
         async with db.execute("SELECT * FROM messages WHERE id=?", (message_id,)) as cursor:
@@ -236,6 +267,7 @@ async def get_status(db_path, message_id):
                 raise ValueError("Message not found")
             return dict(row)
 
+@retry_on_lock()
 async def peek_inbox(db_path, agent_id):
     async with _connect(db_path) as db:
         now = time.time()
@@ -253,6 +285,7 @@ async def peek_inbox(db_path, agent_id):
             senders = list(set([r["sender_id"] for r in rows]))
             return {"count": len(rows), "senders": senders}
 
+@retry_on_lock()
 async def expire_messages(db_path, message_ttl=86400):
     async with _connect(db_path) as db:
         now = time.time()
@@ -264,12 +297,14 @@ async def expire_messages(db_path, message_ttl=86400):
         """, (now, cutoff))
         await db.commit()
 
+@retry_on_lock()
 async def get_recent_messages(db_path, limit=100):
     async with _connect(db_path) as db:
         async with db.execute("SELECT * FROM messages ORDER BY created_at DESC LIMIT ?", (limit,)) as cursor:
             rows = await cursor.fetchall()
             return [dict(row) for row in rows]
 
+@retry_on_lock()
 async def get_stats(db_path):
     async with _connect(db_path) as db:
         async with db.execute("SELECT COUNT(*) FROM messages") as cursor:
