@@ -92,17 +92,15 @@ class Skill(BaseModel):
 # FastMCP Middleware (D14, D22, D23)
 class ActivityTracker:
     async def __call__(self, context: Context, call_next):
-        caller = None
-        args = {}
-        tool_name = "unknown"
-        if hasattr(context, "request") and context.request:
-            if hasattr(context.request, "params") and context.request.params:
-                if hasattr(context.request.params, "arguments"):
-                    args = context.request.params.arguments
-                if hasattr(context.request.params, "name"):
-                    tool_name = context.request.params.name
-
+        method = getattr(context, "method", None)
+        msg = getattr(context, "message", None)
+        tool_name = getattr(msg, "name", "unknown") if (method == "tools/call" and msg) else "unknown"
+        args = getattr(msg, "arguments", {}) or {}
         caller = args.get("agent_id") or args.get("sender_id")
+        
+        message_id = args.get("message_id")
+        arg_summary = str(args)[:100] + "..." if len(str(args)) > 100 else str(args)
+
         if caller:
             # Refresh last_seen (D23)
             await db.touch_last_seen(DB_PATH, caller)
@@ -110,13 +108,19 @@ class ActivityTracker:
         try:
             result = await call_next(context)
             outcome = "success"
+            error_str = None
         except Exception as e:
-            outcome = f"error: {str(e)}"
+            import traceback
+            outcome = "error"
+            error_str = str(e) + "\n" + traceback.format_exc()
             activity_buffer.append({
                 "timestamp": time.time(),
                 "agent": caller,
                 "tool": tool_name,
-                "outcome": outcome
+                "outcome": outcome,
+                "message_id": message_id,
+                "arg_summary": arg_summary,
+                "error": error_str
             })
             raise e
             
@@ -124,7 +128,10 @@ class ActivityTracker:
             "timestamp": time.time(),
             "agent": caller,
             "tool": tool_name,
-            "outcome": outcome
+            "outcome": outcome,
+            "message_id": message_id,
+            "arg_summary": arg_summary,
+            "error": error_str
         })
         return result
 
@@ -153,14 +160,14 @@ async def list_agents() -> list[dict]:
     return await db.get_all_agents(DB_PATH)
 
 @mcp.tool()
-async def send_message(sender_id: str, recipient_id: str, payload: str, context: str | None = None, session_id: str | None = None) -> dict:
+async def send_message(sender_id: str, recipient_id: str, payload: str, context: str | None = None, session_id: str | None = None, subject: str | None = None) -> dict:
     """
     Send a task or message to another agent.
     If continuing an existing conversation, provide the session_id.
     Returns the message_id which you can use to check status later via check_status.
     Your result will also be delivered to your inbox as a 'result' message when completed.
     """
-    return await db.enqueue_message(DB_PATH, sender_id, recipient_id, payload, context, session_id)
+    return await db.enqueue_message(DB_PATH, sender_id, recipient_id, payload, context, session_id, subject=subject)
 
 @mcp.tool()
 async def check_inbox(agent_id: str, wait: bool = True, timeout: int = 30) -> list[dict]:
@@ -290,3 +297,13 @@ async def api_restart():
     loop = asyncio.get_running_loop()
     loop.call_later(0.5, lambda: os._exit(42))
     return {"ok": True, "restarting": True}
+
+@app.post("/api/agents/{agent_id}/disconnect")
+async def api_agents_disconnect(agent_id: str):
+    await db.set_agent_offline(DB_PATH, agent_id)
+    return {"ok": True, "agent_id": agent_id, "status": "offline"}
+
+@app.post("/api/purge")
+async def api_purge():
+    purged = await db.delete_old(DB_PATH)
+    return {"ok": True, "purged_messages": purged}

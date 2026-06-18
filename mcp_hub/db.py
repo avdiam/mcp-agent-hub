@@ -70,9 +70,16 @@ async def init_db(db_path="hub.db"):
                 flagged_stale INTEGER DEFAULT 0,
                 claimed_at REAL,
                 created_at REAL,
-                updated_at REAL
+                updated_at REAL,
+                subject TEXT
             )
         """)
+        
+
+        try:
+            await db.execute("ALTER TABLE messages ADD COLUMN subject TEXT")
+        except sqlite3.OperationalError:
+            pass
         
         await db.execute("CREATE INDEX IF NOT EXISTS idx_msgs_recipient_status ON messages(recipient_id, status)")
         await db.execute("CREATE INDEX IF NOT EXISTS idx_msgs_session ON messages(session_id)")
@@ -114,7 +121,7 @@ async def touch_last_seen(db_path, agent_id):
         await db.commit()
 
 @retry_on_lock()
-async def enqueue_message(db_path, sender_id, recipient_id, payload, context=None, session_id=None, parent_id=None, kind="task", response=None):
+async def enqueue_message(db_path, sender_id, recipient_id, payload, context=None, session_id=None, parent_id=None, kind="task", response=None, subject=None):
     message_id = str(uuid.uuid4())
     if not session_id:
         session_id = str(uuid.uuid4())
@@ -135,9 +142,9 @@ async def enqueue_message(db_path, sender_id, recipient_id, payload, context=Non
         await db.execute("""
             INSERT INTO messages (
                 id, session_id, parent_id, kind, sender_id, recipient_id,
-                payload, context, response, status, flagged_stale, created_at, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?)
-        """, (message_id, session_id, parent_id, kind, sender_id, recipient_id, payload, context, response, is_stale, now, now))
+                payload, context, response, status, flagged_stale, created_at, updated_at, subject
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?)
+        """, (message_id, session_id, parent_id, kind, sender_id, recipient_id, payload, context, response, is_stale, now, now, subject))
         await db.commit()
     
     return {"message_id": message_id, "session_id": session_id}
@@ -311,3 +318,14 @@ async def get_stats(db_path):
             row = await cursor.fetchone()
             total_messages = row[0]
             return {"total_messages": total_messages}
+
+@retry_on_lock()
+async def delete_old(db_path):
+    async with _connect(db_path) as db:
+        cursor = await db.execute("""
+            DELETE FROM messages 
+            WHERE status IN ('completed', 'failed', 'expired')
+        """)
+        rowcount = cursor.rowcount
+        await db.commit()
+        return rowcount
