@@ -31,9 +31,9 @@ This project is **worked on from two separate PCs**, so **nothing may be saved a
 
 All preserved state lives in checked-in files; read them at the start of every session and update them in the **same change** as the work they describe:
 
-- `tasks.md` — **the source of truth for what's pending** (open questions, things to verify, the unstarted implementation steps).
-- `sessions.md` — append-only **history of what's been done** (newest first). Add an entry before ending a session.
-- `mem/` — an **in-repo** folder of tracked markdown notes for anything durable that doesn't fit `tasks.md`/`sessions.md` (references, setup recipes, decisions-in-progress). The project-local stand-in for Claude memories — use it **instead of** `~/.claude`. (See `mem/README.md`.)
+- `docs/dev/tasks.md` — **the source of truth for what's pending** (open questions, things to verify, the unstarted implementation steps).
+- `docs/dev/sessions.md` — append-only **history of what's been done** (newest first). Add an entry before ending a session.
+- `docs/dev/mem/` — an **in-repo** folder of tracked markdown notes for anything durable that doesn't fit `tasks.md`/`sessions.md` (references, setup recipes, decisions-in-progress). The project-local stand-in for Claude memories — use it **instead of** `~/.claude`. (See `docs/dev/mem/README.md`.)
 
 Do not rely on the built-in memory tools for this project — write to these files/folders (which travel with the repo) instead.
 
@@ -41,17 +41,22 @@ Do not rely on the built-in memory tools for this project — write to these fil
 
 ```text
 mcp-agent-hub/
-├── hub.py            # FastAPI app + FastMCP server, mounted at /mcp
-├── db.py             # all SQLite access (WAL mode)
+├── README.md         # Explains project and installation
+├── mcp_hub/          # Main package for MCP hub application
+│   ├── hub.py        # FastAPI app + FastMCP server, mounted at /mcp
+│   ├── db.py         # all SQLite access (WAL mode)
+│   └── templates/    # dashboard HTML templates
+├── docs/dev/         # Project tracking, plans, and durable notes
+│   ├── mem/          # in-repo durable notes (travels with git)
+│   └── *.md          # design docs, tasks, sessions
+├── scripts/          # debug utilities and testing scripts
+│   ├── prompts/      # Agent prompt templates
+│   └── debug_*.py    # transport/initialize debugging helpers
+├── tests/            # test_db.py + test_mcp.py
+├── run_hub.py        # supervisor launcher
 ├── hook_peek.py      # optional client hook: peeks /api/peek to nudge an agent (D19)
-├── templates/
-│   └── index.html    # dashboard (Jinja2 + Tailwind via CDN)
-├── tests/            # test_db.py (tmp_path) + test_mcp.py (temp-DB, non-destructive)
 ├── requirements.txt          # pinned deps
-├── requirements-frozen.txt   # exact pins from pip freeze (Step 1 residual, now done)
-├── debug_mcp.py, debug_mcp_lowlevel.py, validate.py  # transport/initialize debugging helpers
-├── mem/              # in-repo durable notes (travels with git)
-└── *.md              # the design docs above
+└── requirements-frozen.txt   # exact pins
 ```
 *(`hub.db`, `*.log` are runtime artifacts and gitignored.)*
 

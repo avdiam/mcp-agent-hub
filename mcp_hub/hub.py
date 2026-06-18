@@ -14,8 +14,9 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from fastmcp import FastMCP, Context
 from fastmcp.utilities.lifespan import combine_lifespans
 from pydantic import BaseModel, Field
+from pathlib import Path
 
-import db
+from . import db
 
 # Global configurations
 DB_PATH = "hub.db"
@@ -233,7 +234,7 @@ app.add_middleware(OriginValidationMiddleware)
 # Mount the MCP ASGI app at /mcp
 app.mount("/mcp", mcp_app)
 
-templates = Jinja2Templates(directory="templates")
+templates = Jinja2Templates(directory=Path(__file__).parent / "templates")
 
 @app.get("/", response_class=HTMLResponse)
 async def read_root(request: Request):

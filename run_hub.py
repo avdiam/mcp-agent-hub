@@ -5,9 +5,9 @@ import time
 def main():
     print("Starting MCP Agent Hub Supervisor...")
     while True:
-        print("Launching uvicorn hub:app...")
+        print("Launching uvicorn mcp_hub.hub:app...")
         process = subprocess.Popen(
-            [sys.executable, "-m", "uvicorn", "hub:app", "--host", "127.0.0.1", "--port", "8000"]
+            [sys.executable, "-m", "uvicorn", "mcp_hub.hub:app", "--host", "127.0.0.1", "--port", "8000"]
         )
         process.wait()
         

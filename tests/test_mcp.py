@@ -3,16 +3,16 @@ import pytest_asyncio
 import asyncio
 from httpx import ASGITransport, AsyncClient
 
-from hub import app, DB_PATH
-from hub import register_agent, send_message, check_inbox, reply_to_message, check_status, request_input
-import db
+from mcp_hub.hub import app, DB_PATH
+from mcp_hub.hub import register_agent, send_message, check_inbox, reply_to_message, check_status, request_input
+import mcp_hub.db as db
 
 @pytest_asyncio.fixture
 async def test_client():
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://localhost") as client:
         yield client
 
-import hub
+import mcp_hub.hub as hub
 
 @pytest_asyncio.fixture(autouse=True)
 async def setup_db(tmp_path):

@@ -5,7 +5,7 @@ import json
 import sqlite3
 import aiosqlite
 
-import db
+import mcp_hub.db as db
 
 @pytest_asyncio.fixture
 async def temp_db(tmp_path):
