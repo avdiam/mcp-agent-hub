@@ -7,7 +7,7 @@ from contextlib import asynccontextmanager
 import os
 
 from fastapi import FastAPI, Request
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse, Response
 from fastapi.templating import Jinja2Templates
 from starlette.middleware.base import BaseHTTPMiddleware
 
@@ -74,7 +74,11 @@ class OriginValidationMiddleware(BaseHTTPMiddleware):
                 if sfs is not None and sfs not in ("same-origin", "none"):
                     return JSONResponse({"detail": "Cross-site request blocked"}, status_code=403)
                     
-        return await call_next(request)
+        response = await call_next(request)
+        # frame-ancestors only works as an HTTP header (Chrome ignores it in <meta>)
+        response.headers["X-Frame-Options"] = "DENY"
+        response.headers.setdefault("Content-Security-Policy", "frame-ancestors 'none'")
+        return response
 
 
 # FastMCP Server Setup
@@ -246,6 +250,22 @@ templates = Jinja2Templates(directory=Path(__file__).parent / "templates")
 @app.get("/", response_class=HTMLResponse)
 async def read_root(request: Request):
     return templates.TemplateResponse(request=request, name="index.html")
+
+FAVICON_SVG = ('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">'
+               '<defs><linearGradient id="g" x1="0" y1="0" x2="1" y2="1">'
+               '<stop offset="0%" stop-color="#6366F1"/>'
+               '<stop offset="100%" stop-color="#EC4899"/>'
+               '</linearGradient></defs>'
+               '<rect width="32" height="32" rx="8" fill="url(#g)"/>'
+               '<path d="M17 3L7 18h6v11l10-15h-6z" fill="white"/></svg>')
+
+@app.get("/favicon.svg", include_in_schema=False)
+async def favicon_svg():
+    return Response(content=FAVICON_SVG, media_type="image/svg+xml")
+
+@app.get("/favicon.ico", include_in_schema=False)
+async def favicon_ico():
+    return Response(status_code=204)
 
 @app.get("/api/state")
 async def api_state():

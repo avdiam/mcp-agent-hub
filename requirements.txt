@@ -20,5 +20,6 @@ pydantic>=2.11,<3        # transitive via fastmcp/fastapi; guard against a v3 ma
 
 # dev / test
 pytest>=8
+pytest-asyncio>=1.0     # async test fixtures used by test_db.py + test_mcp.py
 httpx>=0.27             # real-over-HTTP smoke test (transport + Origin + /api/peek)
 ruff>=0.4               # fast linter and formatter

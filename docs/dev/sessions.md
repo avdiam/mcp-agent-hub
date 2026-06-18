@@ -2,6 +2,15 @@
 
 > Append-only log of what was accomplished each session. Pairs with `tasks.md` (what's left). This project travels between two PCs and uses **no local Claude memories** — this file is the durable record. Newest session first.
 
+## 2026-06-18 — Polish & v1 Closing Tasks Complete
+
+Completed all post-v1 polish tasks as the backend owner (agy):
+- **README install fixes:** Clarified `~/.gemini/config/mcp_config.json` (not `config.json`) and the object-based `serverUrl` layout for the Antigravity CLI config, alongside enabling JSON hooks in `config.json`.
+- **Database cleanup:** Deleted leftover legacy message rows referencing `test-agent` and `test_agent` in `hub.db` using a scratch script, confirming only 85 completed rows remain and the registry is clean.
+- **MCP Inspector CLI smoke check:** Verified the tool listing over HTTP wire against a live hub instance on port 8000 using the MCP Inspector CLI.
+- **Decision Log (D28):** Documented the consensus-based backend/frontend ownership split and multi-agent roles in `design-decisions.md`.
+- **Test suite validation:** Confirmed all 12 tests (`pytest`) pass successfully.
+
 ## 2026-06-18 — Workstream 2 (IN PROGRESS): dashboard interactivity & explainability — iteration 1 done
 
 Second post-v1 workstream, 3-agent split (operator-approved). **Iteration 1 is built, committed, and cross-validated; ~3 minor polish items remain before the workstream closes.**

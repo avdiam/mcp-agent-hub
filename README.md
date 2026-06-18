@@ -68,15 +68,24 @@ Claude Desktop expects an stdio-based MCP server. To connect it to the running H
 ```
 
 ### 3. Antigravity CLI (agy cli)
-First, register the server in your `~/.gemini/config/config.json`:
+First, register the server in `~/.gemini/config/mcp_config.json` (save as UTF-8 without BOM):
 ```json
 {
-  "jsonHooksEnabled": true,
   "mcpServers": {
-    "agent-hub": "http://localhost:8000/mcp"
+    "agent-hub": {
+      "serverUrl": "http://localhost:8000/mcp"
+    }
   }
 }
 ```
+
+Then, enable hooks in `~/.gemini/config/config.json`:
+```json
+{
+  "jsonHooksEnabled": true
+}
+```
+
 
 For the push-notifications (nudges), add the `hook_peek.py` script to your hooks configuration in `~/.gemini/config/hooks.json`:
 ```json
