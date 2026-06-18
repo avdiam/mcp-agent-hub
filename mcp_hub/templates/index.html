@@ -170,29 +170,29 @@
             <!-- Populated via JS -->
         </div>
 
-        <!-- Top Row: Agents & Activity -->
-        <div class="grid grid-cols-1 lg:grid-cols-3 gap-8">
+        <!-- Top Row: Agents & Activity (Foldable together) -->
+        <div class="flex items-center justify-between">
+            <button onclick="toggleAgents()" class="group flex items-center gap-2 text-lg font-semibold text-white">
+                <svg id="agents-chevron" class="chevron w-4 h-4 text-slate-500 group-hover:text-primary-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"></path></svg>
+                <svg class="w-5 h-5 text-primary-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0zm6 3a2 2 0 11-4 0 2 2 0 014 0zM7 10a2 2 0 11-4 0 2 2 0 014 0z"></path></svg>
+                Connected Agents & Live Activity
+            </button>
+            <div class="flex items-center gap-3">
+                <!-- Status legend -->
+                <div class="hidden md:flex items-center gap-3 text-[11px] text-slate-500">
+                    <span class="flex items-center gap-1"><span class="status-dot status-online"></span>online</span>
+                    <span class="flex items-center gap-1" title="No tool call in the last 90s"><span class="status-dot status-stale"></span>stale</span>
+                    <span class="flex items-center gap-1" title="Explicitly disconnected"><span class="status-dot status-offline"></span>offline</span>
+                </div>
+                <span id="agent-count" class="text-xs font-medium bg-white/5 text-slate-400 px-2 py-1 rounded-md">0 Active</span>
+            </div>
+        </div>
+
+        <div id="agents-panel" class="grid grid-cols-1 lg:grid-cols-3 gap-8 collapsible">
 
             <!-- Agents Registry -->
             <div class="lg:col-span-2 flex flex-col gap-4">
-                <div class="flex items-center justify-between">
-                    <button onclick="toggleAgents()" class="group flex items-center gap-2 text-lg font-semibold text-white">
-                        <svg id="agents-chevron" class="chevron w-4 h-4 text-slate-500 group-hover:text-primary-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"></path></svg>
-                        <svg class="w-5 h-5 text-primary-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0zm6 3a2 2 0 11-4 0 2 2 0 014 0zM7 10a2 2 0 11-4 0 2 2 0 014 0z"></path></svg>
-                        Connected Agents
-                    </button>
-                    <div class="flex items-center gap-3">
-                        <!-- Status legend -->
-                        <div class="hidden md:flex items-center gap-3 text-[11px] text-slate-500">
-                            <span class="flex items-center gap-1"><span class="status-dot status-online"></span>online</span>
-                            <span class="flex items-center gap-1" title="No tool call in the last 90s"><span class="status-dot status-stale"></span>stale</span>
-                            <span class="flex items-center gap-1" title="Explicitly disconnected"><span class="status-dot status-offline"></span>offline</span>
-                        </div>
-                        <span id="agent-count" class="text-xs font-medium bg-white/5 text-slate-400 px-2 py-1 rounded-md">0 Active</span>
-                    </div>
-                </div>
-
-                <div id="agents-panel" class="glass-panel rounded-xl overflow-hidden flex-grow flex flex-col collapsible">
+                <div class="glass-panel rounded-xl overflow-hidden flex-grow flex flex-col">
                     <div class="overflow-x-auto">
                         <table class="w-full text-left text-sm table-fixed">
                             <thead class="bg-white/5 text-slate-400 uppercase text-xs tracking-wider">
@@ -214,19 +214,19 @@
 
             <!-- Activity Feed -->
             <div class="flex flex-col gap-4">
-                <div class="flex items-center justify-between">
-                    <h2 class="text-lg font-semibold text-white flex items-center gap-2">
-                        <svg class="w-5 h-5 text-accent-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 7h8m0 0v8m0-8l-8 8-4-4-6 6"></path></svg>
-                        Live Activity
-                    </h2>
-                    <div class="flex h-2 w-2 relative">
-                        <span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-accent-400 opacity-75"></span>
-                        <span class="relative inline-flex rounded-full h-2 w-2 bg-accent-500"></span>
+                <div class="glass-panel rounded-xl p-1 h-[280px] overflow-hidden relative flex-grow">
+                    <!-- Subtle header inside feed for context -->
+                    <div class="flex items-center justify-between px-3 pt-2 text-[11px] uppercase tracking-wider text-slate-500 font-semibold border-b border-white/5 pb-2">
+                        <span class="flex items-center gap-1.5">
+                            <svg class="w-3.5 h-3.5 text-accent-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 7h8m0 0v8m0-8l-8 8-4-4-6 6"></path></svg>
+                            Activity Log
+                        </span>
+                        <div class="flex h-1.5 w-1.5 relative">
+                            <span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-accent-400 opacity-75"></span>
+                            <span class="relative inline-flex rounded-full h-1.5 w-1.5 bg-accent-500"></span>
+                        </div>
                     </div>
-                </div>
-
-                <div class="glass-panel rounded-xl p-1 h-[280px] overflow-hidden relative">
-                    <div id="activity-feed" class="h-full overflow-y-auto custom-scrollbar p-3 flex flex-col gap-2">
+                    <div id="activity-feed" class="h-[calc(100%-36px)] overflow-y-auto custom-scrollbar p-3 flex flex-col gap-2">
                         <!-- Populated via JS -->
                     </div>
                     <div class="absolute bottom-0 left-0 right-0 h-12 bg-gradient-to-t from-dark-800 to-transparent pointer-events-none"></div>
