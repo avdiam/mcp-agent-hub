@@ -2,6 +2,17 @@
 
 > Append-only log of what was accomplished each session. Pairs with `tasks.md` (what's left). This project travels between two PCs and uses **no local Claude memories** — this file is the durable record. Newest session first.
 
+## 2026-06-18 — NOW-tier tech-debt: registry cleanup, .gitattributes, doc-currency, D26 security pass
+
+Knocked out the "NOW" tech-debt tier (items 1–4 of the agreed roadmap).
+- **Registry cleanup.** Deleted the leftover `test-agent` / `test_agent` rows from the live `agents` table (3 real agents remain: `antigravity-cli`, `claude-code-avdia`, `antigravity-2`).
+- **`.gitattributes`** (`* text=auto eol=lf` + binary guards) to stop CRLF↔LF churn across the two PCs. Commit `0125f3a`.
+- **MCP spec-currency.** Refreshed the `2025-03-26` transport-revision citations in `specs.md`/`architecture.md` to note current stable `2025-06-18`. Commit `0125f3a`.
+- **Open-source backlog item** (relayed via agy) added under a new "Distribution (future)" heading in `tasks.md`. Commit `0125f3a`.
+- **`/security-review` is BLOCKED on a missing git remote.** The builtin diffs against `origin/HEAD`; this repo is local-only (no remote yet — publishing to GitHub is the new backlog item), so the tooled review can't run until we publish. Recorded so it isn't re-discovered.
+- **Manual security pass of the NEW D26 recovery surface** (never covered by the earlier review): `db.reset_stuck` is a fixed parameterless `UPDATE` → no injection; `/api/reset` + `/api/restart` reject evil Origin / spoofed Host / cross-site (403, handler never runs — verified live, server stayed up); `/api/restart` is POST-only (405 on GET) so a cross-site `<img>`/navigation can't fire it, and a cross-site POST carries `Origin` → rejected. **Verdict: no new high/medium risk** — the recovery endpoints don't widen the trust model; the sole residual (a local non-browser process can POST restart/reset → DoS) is the **same accepted D11 no-auth localhost residual** as every other endpoint, gated by the `127.0.0.1` bind.
+- **Still open:** the localhost-vs-networked decision (gates auth/retention v2 work); confirm/retire the Inspector CLI smoke check; README live-verify; the rest of the v2 backlog.
+
 ## 2026-06-18 — v1 shipped: security committed, recovery controls (D26), repo restructure (D27), log consolidation
 
 Drove a full session through the hub with `antigravity-cli` (shared working tree; commits serialized). Four commits landed; docs reconciled to match.
