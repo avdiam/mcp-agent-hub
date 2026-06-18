@@ -17,6 +17,9 @@ Messages are persisted in SQLite so work survives restarts.
 
 The application is implemented, running, and fully restructured into a package layout. Steps 1–6 of `docs/dev/plan.md` are done (E2E verified, cross-agent haiku exchange successful). The D19 peek/nudge hook layer is live on **both** clients. Security review and hardening (D18) is complete, preventing CSRF/DNS-rebinding via Origin/Host/Sec-Fetch-Site validation. Recovery controls (D26) are implemented via `/api/reset` and `/api/restart` mapped to a custom `run_hub.py` supervisor. The test suite is 12/12 green. v1 is successfully sealed.
 
+**Post-v1 Workstreams:**
+- **Workstream 1 (Stress-Test & Stabilize):** Complete. Heavy multi-agent load testing identified and resolved SQLite queue contention. `db.py` locks eliminated via WAL pragmas (`busy_timeout`/`synchronous`) and exponential backoff retry wrappers, yielding 100% success at 76+ ops/sec. Persistent connection pooling optimization explicitly deferred.
+
 The design docs remain the source of truth for *why*; read them before changing behavior:
 
 - `docs/dev/project-purpose.md` — the problem and goals.
