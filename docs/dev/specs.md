@@ -97,11 +97,18 @@ The dashboard is served at `http://localhost:8000/` (live data via `/api/state`;
   * A **⚠ stale recipient** flag on messages sent to a stale agent (`flagged_stale`).
   * A button to view the full payload/response (and, for an `input_request`, the question) in a modal.
 * **Activity Panel (D22):** a live feed of recent tool calls (tool name, agent-if-known, outcome, timestamp), backed by an in-memory ring buffer (last ~200 events) — the observability goal's activity stream, surfaced via `/api/state`.
+* **Operator recovery controls (D26):** header **Reset** and **Restart** buttons, each behind a custom in-page confirm dialog (not `window.confirm`). Reset posts to `/api/reset`; Restart posts to `/api/restart` and shows an overlay that waits for the server to go down and come back before reloading.
 * `/api/state` returns the recent messages (capped at `DASHBOARD_MESSAGE_LIMIT`) plus all agents, the recent **activity events** (D22), and header stats (uptime, total messages), and is polled every 2 seconds.
+* **Security:** all agent-controlled fields are HTML-escaped before insertion (stored-XSS defense), and the page carries a `Content-Security-Policy` meta (D18 hardening note).
+
+### Operator Recovery Endpoints (D26)
+Two unauthenticated, operator-only POST endpoints on the FastAPI app (localhost trust model; behind the same `Origin`/`Host`/`Sec-Fetch-Site` middleware so a cross-site page can't invoke them):
+* **`POST /api/reset`** — *soft reset.* Clears the in-memory activity ring buffer and reclaims stuck `in_progress` messages back to `pending` (`db.reset_stuck`). Non-destructive to durable data (at-least-once already tolerates the redelivery). Returns `{ ok, cleared_events, reclaimed_messages }`.
+* **`POST /api/restart`** — *hard restart.* Exits the process with the sentinel code `42` (`os._exit`) so the `run_hub.py` supervisor relaunches a clean process. Returns `{ ok, restarting }`.
 
 ## 5. Storage / Persistence
 * Database: `sqlite3` in **WAL mode** (concurrent reads during writes; far fewer "database is locked" errors).
-* File: `hub.db` stored in the same directory as the server script.
+* File: `hub.db`, created in the **current working directory** (`DB_PATH="hub.db"`). Always launch via `python run_hub.py` from the repo root so there is one canonical DB at the root (D27); launching from elsewhere would create/use a different `hub.db`.
 * Schema:
   * `agents` table: `id` (PK), `description` (TEXT, nullable), `skills` (TEXT / JSON), `status`, `last_seen`.
   * `messages` table: `id` (PK), `session_id`, `parent_id` (nullable, threads `input_request`/`result` → parent task), `kind` (`task` | `input_request` | `result`, default `task`), `sender_id`, `recipient_id`, `payload`, `context`, `response`, `status` (`pending` | `in_progress` | `input_required` | `completed` | `failed` | `expired`), `flagged_stale` (INTEGER, default 0), `claimed_at`, `created_at`, `updated_at`.
@@ -109,4 +116,4 @@ The dashboard is served at `http://localhost:8000/` (live data via `/api/state`;
   * `skills` is serialized as JSON text (SQLite has no native array type).
 
 ## 6. Configuration Constants
-Tunable values referenced above — `VISIBILITY_TIMEOUT` (600s), `STALE_THRESHOLD` (90s), the long-poll default `timeout` / `LONGPOLL_TIMEOUT` (30s), `LONGPOLL_INTERVAL` (~1s — the async poll cadence, D21), `DASHBOARD_MESSAGE_LIMIT` (100), and `MESSAGE_TTL` (86400s — the `pending`→`expired` sweep) — with their defaults and rationale are recorded in `design-decisions.md`.
+Tunable values referenced above — `VISIBILITY_TIMEOUT` (600s), `STALE_THRESHOLD` (90s), the long-poll default `timeout` / `LONGPOLL_TIMEOUT` (30s), `LONGPOLL_INTERVAL` (~1s — the async poll cadence, D21), `DASHBOARD_MESSAGE_LIMIT` (100), `MESSAGE_TTL` (86400s — the `pending`→`expired` sweep), and the `RESTART_EXIT_CODE` (`42`) protocol constant shared by `/api/restart` and `run_hub.py` (D26) — with their defaults and rationale are recorded in `design-decisions.md`.

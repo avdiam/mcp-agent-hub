@@ -1,6 +1,8 @@
 # Implementation Plan: MCP Agent Hub
 
-This plan outlines the steps required to build the MCP Agent Hub in a future session. Design decisions and the few open questions it depends on are tracked in `design-decisions.md`.
+This plan outlines the steps required to build the MCP Agent Hub. Design decisions and the few open questions it depends on are tracked in `design-decisions.md`.
+
+> **Post-build note (2026-06-18).** Steps 1–6 are **done**. The repo was later restructured (D27): application code lives in the **`mcp_hub/`** package, these docs under `docs/dev/`, debug helpers under `scripts/`. So where the steps below say `hub.py` / `db.py` / `templates/`, the files are now at `mcp_hub/hub.py` / `mcp_hub/db.py` / `mcp_hub/templates/`, and the server runs via `python run_hub.py` (= `uvicorn mcp_hub.hub:app`). Operator **recovery controls** (Reset/Restart + the `run_hub.py` supervisor) were added post-v1 (D26). The build also did **not** follow the D25 phasing strictly — see `sessions.md`.
 
 ## Build phasing (D25)
 
@@ -17,15 +19,19 @@ Run **`/code-review`** on each phase's diff, **`/security-review`** after P3, an
 1. Create a virtual environment (`python -m venv venv`) and activate it.
 2. Install from the pinned `requirements.txt` (resolved: standalone **`fastmcp` 3.x** — see `design-decisions.md`, D13):
    `pip install -r requirements.txt` (`fastmcp>=3.4,<4`, `fastapi`, `uvicorn[standard]`, `aiosqlite`, `jinja2`, `pydantic`; dev: `pytest`, `httpx`, `ruff`). Do **not** self-pin `starlette` — let `fastmcp` resolve it (3.4.1 floors `starlette>=1.0.1` for CVE-2026-48710). **`pip freeze` after install** to lock patch versions. **Use Context7** to re-verify the live FastMCP 3.x API (`http_app`, `combine_lifespans`, `add_middleware`/`on_call_tool`, the in-memory `Client`) + current FastAPI/uvicorn before coding against them (these facts postdate the assistant's training cutoff); optionally scaffold the FastMCP server with the **`mcp-server-dev`** plugin.
-3. Create the basic directory structure:
+3. Create the directory structure. *(Original flat skeleton shown for build history; current layout is the `mcp_hub/` package per D27 — see the post-build note above and `AGENTS.md` "Layout".)*
    ```text
    mcp-agent-hub/
-   ├── hub.py           (Main FastAPI/FastMCP server)
-   ├── db.py            (SQLite interactions)
-   ├── hook_peek.py     (stdlib-only client hook: peeks /api/peek, nudges the agent — D19)
-   ├── templates/
-   │   └── index.html   (Dashboard UI)
-   ├── tests/           (db + MCP smoke tests)
+   ├── mcp_hub/             (the application package — D27)
+   │   ├── hub.py           (Main FastAPI/FastMCP server)
+   │   ├── db.py            (SQLite interactions)
+   │   └── templates/
+   │       └── index.html   (Dashboard UI)
+   ├── run_hub.py           (supervisor: launches uvicorn, relaunches on exit 42 — D26)
+   ├── hook_peek.py         (stdlib-only client hook: peeks /api/peek, nudges the agent — D19)
+   ├── tests/               (db + MCP smoke tests)
+   ├── docs/dev/            (design docs, tasks, sessions, mem/)
+   ├── scripts/             (debug/transport helpers)
    └── requirements.txt
    ```
 
@@ -89,7 +95,7 @@ Run **`/code-review`** on each phase's diff, **`/security-review`** after P3, an
 
 Drive this with **`/run`** (launch the hub + open the dashboard) and **`/verify`** (confirm the real behaviour, not just green tests). Steps 1–8 are the **P1** haiku E2E; 9–10 are the **P4** hook layer.
 
-1. Run the server: `uvicorn hub:app --port 8000 --host 127.0.0.1`.
+1. Run the server: `python run_hub.py` (the supervisor → `uvicorn mcp_hub.hub:app --host 127.0.0.1 --port 8000`; supports the dashboard Restart, D26). Dev alternative without auto-restart: `uvicorn mcp_hub.hub:app --host 127.0.0.1 --port 8000`.
 2. Open the web dashboard at `http://localhost:8000`.
 3. Configure Claude Code: `claude mcp add --transport http agent-hub http://localhost:8000/mcp` (or `.mcp.json` with `{"type": "http", "url": "http://localhost:8000/mcp"}`). Verify with `claude mcp list` and the `/mcp` panel (tool count).
 4. Configure Antigravity CLI: add `{"mcpServers": {"agent-hub": {"serverUrl": "http://localhost:8000/mcp"}}}` to **`~/.gemini/config/mcp_config.json`** — the path the `agy` CLI actually reads (Windows `C:\Users\<you>\.gemini\config\mcp_config.json`), **not** `~/.gemini/antigravity/mcp_config.json`. Note the `serverUrl` key (not `url`); write it **UTF-8 without BOM** (the Go JSON parser rejects a BOM) and don't leave the file empty (an empty file logs `unexpected end of JSON input`). **Verified 2026-06-15** that AGY connects to a `http://localhost` Streamable HTTP endpoint this way — D1/Q4 caveat closed (see `sessions.md`).

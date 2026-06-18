@@ -2,7 +2,7 @@
 
 > **This file is the source of truth for what's left to do.** This project travels between two PCs and uses **no local Claude memories** — anything worth preserving lives here (pending work) or in `sessions.md` (history of what's done). Update both in the same change as the work.
 
-> **▶ START HERE (next session).** v1 is **feature-complete and security-reviewed**. Steps 1–5 done; Step 6 E2E verified (cross-agent haiku; D19 hooks both clients; `pytest` 10/10, non-destructive). Security review done: **HIGH dashboard XSS** (escaping + CSP) and **MEDIUM Origin/Host hardening** (exact parse + Host/DNS-rebinding + `Sec-Fetch-Site`) both fixed and browser-verified. **Next actions:** (1) commit the security patches + doc refresh; (2) a round of dashboard UI changes (operator request); (3) decide which v2 items to pull forward. Skim the newest `sessions.md` entry first.
+> **▶ START HERE (next session).** v1 is **shipped, security-reviewed, committed, and reconciled.** Steps 1–6 done; **recovery controls (D26)** + **repo restructure (D27)** + log consolidation landed and verified (commits `a9b6e66` security, `ff331ca`/`acc9e61` recovery, `1e7e8da` restructure, `ae99028` logs; `pytest` 12/12). App code now lives in `mcp_hub/`; run with `python run_hub.py`. **Next actions:** (1) finish the `README.md` install fixes (Claude Code `claude mcp add --transport http …` + Desktop bridge — agy); (2) clean leftover `test-agent`/`test_agent` registry rows; (3) confirm/retire the Step 5.2 Inspector CLI smoke check; (4) pick which v2 items to pull forward (see "Possible future / v2"). Skim the newest `sessions.md` entry first.
 
 ## Design questions — ALL RESOLVED (as of 2026-06-15)
 - [x] **Q1 / D2 — Delivery model.** RESOLVED (2026-06-15) → **D2 (confirmed) + D19**: long-poll `check_inbox` stays primary (`wait=True` default; `wait=False` for one-off checks); **added an optional hook peek/nudge layer** — read-only `/api/peek` + a shipped `hook_peek.py` (Claude Code `Stop`/`UserPromptSubmit`; agy `StopHook`/`PreInvocationHook`). The hook **peeks, never claims**, so at-least-once is preserved. agy's hook system verified from the `agy.exe` binary.
@@ -47,7 +47,10 @@ Build in **phases** (D25): **P1** skeleton + green haiku E2E → **P2** skills/`
   - [x] 2026-06-18: `hook_peek.py` `count`/`pending_count` bug fixed; nudge now fires.
   - [x] 2026-06-18: `test_mcp.py` made non-destructive (temp DB); `pytest` 10/10 green.
   - [x] 2026-06-18: security review done — HIGH dashboard XSS (escaping + CSP) + MEDIUM Origin/Host hardening (Sec-Fetch-Site) both fixed & browser-verified; `pytest` 10/10.
-  - [ ] **Remaining:** commit security patches + doc refresh, then dashboard UI changes.
+  - [x] 2026-06-18: security patches **committed** (`a9b6e66`); D18 hardening folded into the decision log.
+  - [x] 2026-06-18: **recovery controls (D26)** — soft Reset (`/api/reset`) + hard Restart (`/api/restart`) + `run_hub.py` supervisor (exit-code-42 relaunch); `pytest` 12/12 (added `test_api_reset`/`test_api_recovery_middleware`); browser-verified on `:8001` (caught + fixed a restart-overlay race). Commits `ff331ca`/`acc9e61`.
+  - [x] 2026-06-18: **repo restructure (D27)** — `mcp_hub/` package, `docs/dev/`, `scripts/`, root `README.md`; run via `python run_hub.py` (`uvicorn mcp_hub.hub:app`). Logs consolidated to `logs/hub.log`. Commits `1e7e8da`/`ae99028`. Re-verified live (imports, templates path, restart-from-root, dashboard renders, 403s hold).
+  - [ ] **Remaining:** README install fixes (agy); `test-agent`/`test_agent` registry cleanup; confirm/retire the Inspector CLI smoke check; v2 triage.
 
 ## Possible future / v2 (deferred)
 - [ ] Optional auth (FastMCP `TokenVerifier` / static bearer token) + a **uniform `caller_id`** arg for per-tool identity/ownership enforcement (D23/D11) — keep `127.0.0.1` binding regardless.

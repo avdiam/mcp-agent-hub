@@ -15,15 +15,15 @@ Messages are persisted in SQLite so work survives restarts.
 
 ## Current status: v1 feature-complete (2026-06-18)
 
-The application is implemented and running. Steps 1–5 of `plan.md` are done (`db.py`, `hub.py`, dashboard, tests). The FastMCP `initialize` -32602 bug is fixed (`ActivityTracker.__call__`). Step 6 E2E is verified: a full cross-agent haiku exchange ran through the hub (`claude-code-avdia` ↔ `antigravity-cli`), and the D19 peek/nudge hook layer is live on **both** clients (Claude Code `Stop`/`UserPromptSubmit`; agy `PreInvocationHook`/`StopHook`). Remaining before tagging v1: a green `pytest` (done — 10/10, after `test_mcp.py` was made non-destructive) and a `/security-review`.
+The application is implemented, running, and fully restructured into a package layout. Steps 1–6 of `docs/dev/plan.md` are done (E2E verified, cross-agent haiku exchange successful). The D19 peek/nudge hook layer is live on **both** clients. Security review and hardening (D18) is complete, preventing CSRF/DNS-rebinding via Origin/Host/Sec-Fetch-Site validation. Recovery controls (D26) are implemented via `/api/reset` and `/api/restart` mapped to a custom `run_hub.py` supervisor. The test suite is 12/12 green. v1 is successfully sealed.
 
 The design docs remain the source of truth for *why*; read them before changing behavior:
 
-- `project-purpose.md` — the problem and goals.
-- `specs.md` — system components, the 9 MCP tools, dashboard, and storage schema.
-- `architecture.md` — components, transport, and trust model.
-- `plan.md` — the step-by-step build plan.
-- `design-decisions.md` — the decision log (D1–D25), tunable constants, and any open questions. Check this before making design changes. *(As of 2026-06-15, Q1–Q9 and the D20–D25 implementation-review decisions are all locked.)*
+- `docs/dev/project-purpose.md` — the problem and goals.
+- `docs/dev/specs.md` — system components, the 9 MCP tools, dashboard, and storage schema.
+- `docs/dev/architecture.md` — components, transport, and trust model.
+- `docs/dev/plan.md` — the step-by-step build plan.
+- `docs/dev/design-decisions.md` — the decision log (D1–D27), tunable constants, and any open questions. Check this before making design changes. *(As of 2026-06-15, Q1–Q9 and the D20–D25 implementation-review decisions are all locked; D26–D27 added 2026-06-18.)*
 
 ## Session continuity — read these FIRST every session
 
@@ -77,7 +77,7 @@ pip install -r requirements.txt
 
 # run (binds localhost only, supports dashboard /api/restart)
 python run_hub.py
-# (Alternative: uvicorn hub:app --port 8000 --host 127.0.0.1 for simple/dev run without auto-restart)
+# (Alternative: uvicorn mcp_hub.hub:app --port 8000 --host 127.0.0.1 for simple/dev run without auto-restart)
 # dashboard: http://localhost:8000   |   MCP endpoint: http://localhost:8000/mcp
 
 # tests — both suites are isolated (test_db.py: tmp_path; test_mcp.py: temp DB, no
