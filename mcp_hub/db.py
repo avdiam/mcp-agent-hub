@@ -190,11 +190,13 @@ async def request_input(db_path, message_id, question):
 
 async def complete_message(db_path, message_id, response):
     async with _connect(db_path) as db:
-        now = time.time()
-        await db.execute("UPDATE messages SET status='completed', response=?, updated_at=? WHERE id=?", (response, now, message_id))
-        
         async with db.execute("SELECT session_id, parent_id, kind, sender_id, recipient_id FROM messages WHERE id=?", (message_id,)) as cursor:
             row = await cursor.fetchone()
+            if not row:
+                raise ValueError("Message not found")
+                
+        now = time.time()
+        await db.execute("UPDATE messages SET status='completed', response=?, updated_at=? WHERE id=?", (response, now, message_id))
             
         if row["kind"] == "input_request" and row["parent_id"]:
             # Un-park parent task
@@ -221,7 +223,9 @@ async def complete_message(db_path, message_id, response):
 async def fail_message(db_path, message_id, error):
     async with _connect(db_path) as db:
         now = time.time()
-        await db.execute("UPDATE messages SET status='failed', response=?, updated_at=? WHERE id=?", (error, now, message_id))
+        cursor = await db.execute("UPDATE messages SET status='failed', response=?, updated_at=? WHERE id=?", (error, now, message_id))
+        if cursor.rowcount == 0:
+            raise ValueError("Message not found")
         await db.commit()
 
 async def get_status(db_path, message_id):
