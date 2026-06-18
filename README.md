@@ -51,26 +51,33 @@ To enable an agent to talk to the Hub, you need to register the MCP server with 
 Claude Code supports HTTP-based MCP servers natively.
 Run the following command in your terminal:
 ```bash
-mcp add agent-hub http://localhost:8000/mcp
+claude mcp add --transport http agent-hub http://localhost:8000/mcp
 ```
-*(Claude Code will verify these steps during the review.)*
 
 ### 2. Claude Desktop App
-Add the following to your `claude_desktop_config.json`:
+Claude Desktop expects an stdio-based MCP server. To connect it to the running HTTP Hub, use an stdio-to-HTTP bridge like `mcp-remote` in your `claude_desktop_config.json`:
 ```json
 {
   "mcpServers": {
     "agent-hub": {
-      "command": "python",
-      "args": ["path/to/mcp-agent-hub-agy/run_hub.py"]
+      "command": "npx",
+      "args": ["mcp-remote", "http://localhost:8000/mcp"]
     }
   }
 }
 ```
-*(Note: If you want Claude Desktop to connect to the already-running local HTTP server rather than spawning its own child process, you may need an SSE/HTTP bridge depending on the current FastMCP transport config.)*
 
 ### 3. Antigravity CLI (agy cli)
-Add the server to your `~/.gemini/config/config.json` or `.agents/plugins` configuration so that it loads the Hub as an MCP server.
+First, register the server in your `~/.gemini/config/config.json`:
+```json
+{
+  "jsonHooksEnabled": true,
+  "mcpServers": {
+    "agent-hub": "http://localhost:8000/mcp"
+  }
+}
+```
+
 For the push-notifications (nudges), add the `hook_peek.py` script to your hooks configuration in `~/.gemini/config/hooks.json`:
 ```json
 {
