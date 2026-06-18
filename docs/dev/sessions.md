@@ -2,6 +2,20 @@
 
 > Append-only log of what was accomplished each session. Pairs with `tasks.md` (what's left). This project travels between two PCs and uses **no local Claude memories** — this file is the durable record. Newest session first.
 
+## 2026-06-18 — Workstream 1: stress-test & stabilize — SQLite WAL contention fixed (3-agent effort)
+
+First post-v1 workstream. Three agents collaborated **through the hub** (`claude-code-avdia`, `antigravity-cli`, `antigravity-2`) to load-test the SQLite message queue and harden it. **Two findings, both resolved; correctness gate stayed green throughout.**
+
+- **🔴 Finding #1 — WAL write contention (operational connections ran `busy_timeout=0` + `synchronous=FULL`).** The PRAGMAs were only set in `init_db`; every other `db.py` function opened a bare `aiosqlite.connect()` with SQLite defaults, so under concurrent writers the queue threw `database is locked` en masse. **Fix (agy):** a shared `_connect()` async-contextmanager that sets `busy_timeout=5000` + `synchronous=NORMAL` + `Row` factory on **every** connection (`76cb3d5`), then a `@retry_on_lock()` decorator (5 attempts, exp backoff from 10ms, intercepts `sqlite3.OperationalError` "database is locked") applied to all operational functions (`060e77d`).
+- **🟡 Finding #2 — `NoneType` crash on unknown `message_id`.** `complete_message`/`fail_message` subscripted the SELECT result without a None-check → `reply_to_message` with a bogus id 500'd with "'NoneType' object is not subscriptable". **Fix (agy):** `complete_message` SELECT-validates the row (raises `ValueError("Message not found")`); `fail_message` checks `cursor.rowcount==0` (`c27d993`).
+- **Verification — two independent harnesses, both layers clean:**
+  - **db-level regression gate** (claude — `scripts/stress/db_stress.py`, direct `mcp_hub.db`, throwaway temp DB, commit `00bfc5d`): atomic-claim correctness (D4) **PASS** — 0 double-claims / 0 lost @ 2000 msgs × 32 concurrent claimers (828 claims/s); writer-contention lock errors **53 → 10 (after `_connect`) → 0 (after retry)**. `pytest` 12/12.
+  - **HTTP/MCP-level harness** (antigravity-2 — N concurrent `fastmcp.Client`s vs an **isolated** test hub on `:8100`, *not* the live `:8000`): success **20/1200 (1.7%) → 1200/1200 (100%)**; lock errors **1,169 → 0**; throughput **16.5 → 76.1 MCP calls/s** (4.6×); p50 **3,427 → 525 ms**; p95 **13,759 → 1,443 ms**. The HTTP layer exposed the *user-visible* severity (98% of calls failing pre-fix) that the db-level gate alone couldn't show.
+- **Decision — connection pooling DEFERRED (operator).** Throughput barely moved between the retry fix and a hypothetical pool (db-level 133→146 ops/s) because the retry *hides* contention, it doesn't remove it; the real ceiling is connection-per-call churn (fresh `aiosqlite.connect()` per call). But 100% success at 76 calls/s with p95 < 1.5s is comfortably past single-user/many-local-agents needs, so pooling is logged as a deferred optimization (revisit on multi-user or real throughput pressure) rather than built now — keeps the focus on *stabilize*, not add surface area. **Finding #1 CLOSED.**
+- **Live hub restarted** to load all db.py fixes (`76cb3d5`/`c27d993`/`060e77d`) — the running `:8000` had been executing pre-fix code. Post-restart live-verified: bogus-id `reply_to_message` → clean "Message not found"; load lock-free.
+- **Collaboration / docs:** agy owned the `db.py` fixes + `AGENTS.md` status block (`5b69a21`); claude owned the db-level gate + this `sessions.md`/`tasks.md` recording; antigravity-2 owned the HTTP harness. Commits serialized on the shared working tree.
+- **Still open:** Workstreams 2–4 (dashboard interactivity, new features, dogfood) un-started; pooling deferred; the pre-existing NOW-tier items below still stand.
+
 ## 2026-06-18 — NOW-tier tech-debt: registry cleanup, .gitattributes, doc-currency, D26 security pass
 
 Knocked out the "NOW" tech-debt tier (items 1–4 of the agreed roadmap).
