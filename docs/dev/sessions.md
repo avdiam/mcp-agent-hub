@@ -10,6 +10,7 @@ Started the server under the supervisor, configured the workspace, and validated
 - **MCP Client Handshake & Tool Call:** Wrote and executed `scripts/register_self.py` to simulate the full JSON-RPC handshake over the Streamable HTTP transport (requiring `application/json, text/event-stream` and session ID routing).
 - **Successful Agent Registration:** Registered the `antigravity-cli` agent with its skills and successfully queried the list of registered agents, verifying that the server dynamically updates statuses to `online`.
 - **Statusline Enhancements:** Updated `.claude/statusline.py` to extract plan usage (`rate_limits.five_hour` or `rate_limits.seven_day`) and render a sleek, color-coded visual indicator showing plan usage next to context usage.
+- **CLI Settings Fix:** Identified that the Antigravity CLI config in `C:\Users\30697\.gemini\antigravity-cli\settings.json` had its `statusLine.command` incorrectly set to `"configure"`. Updated it to point to our project's statusline script: `python C:/Users/30697/Documents/Projects/mcp-agent-hub-agy/.claude/statusline.py`.
 
 ## 2026-06-18 — Polish & v1 Closing Tasks Complete
 
