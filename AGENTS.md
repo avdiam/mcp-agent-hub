@@ -114,9 +114,9 @@ Both clients run `hook_peek.py` to nudge themselves to call `check_inbox` when `
 - **Delivery is at-least-once**: `check_inbox` claims atomically; an unacked `in_progress` message is redelivered after `VISIBILITY_TIMEOUT`. Handlers must tolerate a rare duplicate. A `pending` **`task`** unclaimed past `MESSAGE_TTL` is swept to a terminal `expired` state (D6/Q3/D24). Completing a `task` fans a **`kind="result"`** message back to the sender's inbox (D20); `check_status` is the durable/secondary read.
 - **The hook layer peeks, never claims (D19):** the optional `hook_peek.py` hits the read-only `/api/peek` endpoint only to *nudge* an agent to call `check_inbox`. Never let a hook mutate message state or open `hub.db` directly — delivery + ack stay in the MCP `check_inbox`→`reply`/`fail` path.
 - **Store `skills` as JSON text** (the structured Agent-Card capability descriptor; SQLite has no array/object type).
-- **Trust model:** single-user, localhost, no auth — bind `127.0.0.1` only.
+- **Trust model:** single-user, localhost, no auth — bind `127.0.0.1` only. Hardened against cross-site attacks via strict Origin/Host/Sec-Fetch-Site validation (D18).
 - When changing the design, update the relevant doc(s) and the decision log in `design-decisions.md` in the same change.
 
 ## Git
 
-This folder is a git repository (initialized 2026-06-15); `.gitignore` covers `venv/`, `__pycache__/`, and `hub.db`. Commit design/doc changes as you make them.
+This folder is a git repository (initialized 2026-06-15); `.gitignore` covers `venv/`, `__pycache__/`, `hub.db`, and `logs/`. Commit design/doc changes as you make them.
