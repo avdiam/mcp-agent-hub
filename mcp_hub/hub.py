@@ -119,7 +119,7 @@ class ActivityTracker:
                 "tool": tool_name,
                 "outcome": outcome,
                 "message_id": message_id,
-                "arg_summary": arg_summary,
+                "args": arg_summary,
                 "error": error_str
             })
             raise e
@@ -130,7 +130,7 @@ class ActivityTracker:
             "tool": tool_name,
             "outcome": outcome,
             "message_id": message_id,
-            "arg_summary": arg_summary,
+            "args": arg_summary,
             "error": error_str
         })
         return result
@@ -306,4 +306,4 @@ async def api_agents_disconnect(agent_id: str):
 @app.post("/api/purge")
 async def api_purge():
     purged = await db.delete_old(DB_PATH)
-    return {"ok": True, "purged_messages": purged}
+    return {"ok": True, "deleted": purged}
