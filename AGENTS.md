@@ -57,7 +57,7 @@ mcp-agent-hub/
 │   └── debug_*.py    # transport/initialize debugging helpers
 ├── tests/            # test_db.py + test_mcp.py
 ├── run_hub.py        # supervisor launcher
-├── hook_peek.py      # optional client hook: peeks /api/peek to nudge an agent (D19)
+├── .claude/skills/agent-hub-live/  # live-messaging bundle: agent-hub-live skill + SETUP.md + scripts/hub_peek.py (peek-nudge hook, D19)
 ├── requirements.txt          # pinned deps
 └── requirements-frozen.txt   # exact pins
 ```
@@ -91,7 +91,7 @@ pytest tests/test_mcp.py -k test_api_peek
 
 ## D19 hook layer (peek-nudge), per-client config
 
-Both clients run `hook_peek.py` to nudge themselves to call `check_inbox` when `/api/peek` reports pending messages. Claude Code wires it via `~/.claude/settings.json` (`Stop` + `UserPromptSubmit` → `python …/hook_peek.py --agent-id claude-code-avdia`). Antigravity wires it via `~/.gemini/config/`:
+Both clients run the shared `hub_peek.py` (`.claude/skills/agent-hub-live/scripts/hub_peek.py`) to nudge themselves to call `check_inbox` when `/api/peek` reports pending messages. The script takes `--agent-id` (or `$AGENT_HUB_ID`) and a `--mode`: `prompt` prints a plain-text nudge (injected on `UserPromptSubmit`), `stop` emits a `{"decision":"block"}` JSON so a Claude `Stop` hook actually keeps the agent going (plain stdout is ignored on Stop). Claude Code wires it via **project** `.claude/settings.json` (`UserPromptSubmit` → `--mode prompt`, `Stop` → `--mode stop`); full guide in `.claude/skills/agent-hub-live/SETUP.md`. Antigravity wires it via `~/.gemini/config/` (use `--mode prompt` for both hooks):
 
 ```json
 // 1. ~/.gemini/config/config.json — enable json hooks:
@@ -101,11 +101,11 @@ Both clients run `hook_peek.py` to nudge themselves to call `check_inbox` when `
 {
   "PreInvocationHook": {
     "command": "python",
-    "args": ["C:\\Users\\avdia\\Documents\\Projects\\mcp-agent-hub-agy\\hook_peek.py", "--agent-id", "antigravity-cli"]
+    "args": ["C:\\path\\to\\mcp-agent-hub-agy\\.claude\\skills\\agent-hub-live\\scripts\\hub_peek.py", "--mode", "prompt", "--agent-id", "antigravity-cli"]
   },
   "StopHook": {
     "command": "python",
-    "args": ["C:\\Users\\avdia\\Documents\\Projects\\mcp-agent-hub-agy\\hook_peek.py", "--agent-id", "antigravity-cli"]
+    "args": ["C:\\path\\to\\mcp-agent-hub-agy\\.claude\\skills\\agent-hub-live\\scripts\\hub_peek.py", "--mode", "prompt", "--agent-id", "antigravity-cli"]
   }
 }
 ```
@@ -115,7 +115,7 @@ Both clients run `hook_peek.py` to nudge themselves to call `check_inbox` when `
 - **Transport is Streamable HTTP** at `/mcp`. Do not reintroduce the legacy `/sse` + `/messages` transport.
 - **All SQLite access goes through `db.py`**, runs in WAL mode, and stays off the event loop via **`aiosqlite`** (D21 — so the long-poll is an async-poll, never a blocking threadpool hold).
 - **Delivery is at-least-once**: `check_inbox` claims atomically; an unacked `in_progress` message is redelivered after `VISIBILITY_TIMEOUT`. Handlers must tolerate a rare duplicate. A `pending` **`task`** unclaimed past `MESSAGE_TTL` is swept to a terminal `expired` state (D6/Q3/D24). Completing a `task` fans a **`kind="result"`** message back to the sender's inbox (D20); `check_status` is the durable/secondary read.
-- **The hook layer peeks, never claims (D19):** the optional `hook_peek.py` hits the read-only `/api/peek` endpoint only to *nudge* an agent to call `check_inbox`. Never let a hook mutate message state or open `hub.db` directly — delivery + ack stay in the MCP `check_inbox`→`reply`/`fail` path.
+- **The hook layer peeks, never claims (D19):** the optional `hub_peek.py` hits the read-only `/api/peek` endpoint only to *nudge* an agent to call `check_inbox`. Never let a hook mutate message state or open `hub.db` directly — delivery + ack stay in the MCP `check_inbox`→`reply`/`fail` path.
 - **Store `skills` as JSON text** (the structured Agent-Card capability descriptor; SQLite has no array/object type).
 - **Trust model:** single-user, localhost, no auth — bind `127.0.0.1` only. Hardened against cross-site attacks via strict Origin/Host/Sec-Fetch-Site validation (D18).
 - When changing the design, update the relevant doc(s) and the decision log in `design-decisions.md` in the same change.

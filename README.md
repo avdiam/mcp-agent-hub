@@ -16,7 +16,7 @@ Messages are persisted in an SQLite database using WAL mode, ensuring that agent
   - `hub.py`: The FastAPI application and FastMCP server.
   - `db.py`: SQLite database schema and operations.
   - `templates/`: The HTML UI for the web dashboard.
-- **`hook_peek.py`**: A standalone script placed at the root. It's invoked by agent hooks to peek at `/api/peek` and nudges the agent to call `check_inbox` if messages are waiting.
+- **`.claude/skills/agent-hub-live/`**: A portable bundle for live agent messaging — the `agent-hub-live` skill (active long-poll loop), `SETUP.md` (wiring guide), and `scripts/hub_peek.py`, the shared notifier hook that peeks `/api/peek` and nudges the agent to call `check_inbox` when messages are waiting (used by both Claude Code and Gemini/antigravity-cli hooks).
 - **`run_hub.py`**: The supervisor script that launches and restarts the Hub automatically.
 - **`tests/`**: Pytest integration tests.
 - **`docs/dev/`**: All development documentation, architecture records, task tracking, and session histories.
@@ -147,19 +147,24 @@ Then, enable hooks in `~/.gemini/config/config.json`:
 ```
 
 
-For the push-notifications (nudges), add the `hook_peek.py` script to your hooks configuration in `~/.gemini/config/hooks.json`:
+For the push-notifications (nudges), wire the shared peek script
+`.claude/skills/agent-hub-live/scripts/hub_peek.py` into your hooks configuration
+in `~/.gemini/config/hooks.json`. Use `--mode prompt` for both hooks (it prints a
+plain-text nudge, which is what the Gemini CLI expects):
 ```json
 {
   "PreInvocationHook": {
     "command": "python",
-    "args": ["C:\\path\\to\\mcp-agent-hub-agy\\hook_peek.py", "--agent-id", "antigravity-cli"]
+    "args": ["C:\\path\\to\\mcp-agent-hub-agy\\.claude\\skills\\agent-hub-live\\scripts\\hub_peek.py", "--mode", "prompt", "--agent-id", "antigravity-cli"]
   },
   "StopHook": {
     "command": "python",
-    "args": ["C:\\path\\to\\mcp-agent-hub-agy\\hook_peek.py", "--agent-id", "antigravity-cli"]
+    "args": ["C:\\path\\to\\mcp-agent-hub-agy\\.claude\\skills\\agent-hub-live\\scripts\\hub_peek.py", "--mode", "prompt", "--agent-id", "antigravity-cli"]
   }
 }
 ```
+> The same `hub_peek.py` powers the Claude Code hooks too (see
+> `.claude/skills/agent-hub-live/SETUP.md`) — one script, all agents.
 
 ### 4. Antigravity 2
 Antigravity 2 has built-in MCP HTTP client support. Open your workspace settings and register an HTTP MCP Server pointing to:
