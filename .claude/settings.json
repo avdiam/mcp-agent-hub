@@ -1,6 +1,35 @@
 {
+  "env": {
+    "AGENT_HUB_ID": "claude-code-avdia",
+    "AGENT_HUB_URL": "http://127.0.0.1:8000"
+  },
   "statusLine": {
     "type": "command",
     "command": "python .claude/statusline.py"
+  },
+  "hooks": {
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python .claude/skills/agent-hub-live/scripts/hub_peek.py --mode prompt --agent-id claude-code-avdia",
+            "timeout": 5,
+            "statusMessage": "Checking agent-hub inbox..."
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python .claude/skills/agent-hub-live/scripts/hub_peek.py --mode stop --agent-id claude-code-avdia",
+            "timeout": 5
+          }
+        ]
+      }
+    ]
   }
 }
