@@ -28,7 +28,8 @@ Run **`/code-review`** on each phase's diff, **`/security-review`** after P3, an
    │   └── templates/
    │       └── index.html   (Dashboard UI)
    ├── run_hub.py           (supervisor: launches uvicorn, relaunches on exit 42 — D26)
-   ├── hook_peek.py         (stdlib-only client hook: peeks /api/peek, nudges the agent — D19)
+   ├── .claude/skills/agent-hub-live/   (portable live-messaging bundle: SKILL.md + SETUP.md
+   │   └── scripts/hub_peek.py          + the stdlib-only client hook that peeks /api/peek and nudges the agent — D19)
    ├── tests/               (db + MCP smoke tests)
    ├── docs/dev/            (design docs, tasks, sessions, mem/)
    ├── scripts/             (debug/transport helpers)
@@ -73,7 +74,7 @@ Run **`/code-review`** on each phase's diff, **`/security-review`** after P3, an
    * `check_status()` — surfaces the pending `question` when `input_required` (durable/secondary read; the result is also pushed to the sender's inbox — D20)
    * `disconnect_agent()`
 4. Mount the MCP ASGI app at `/mcp` via `mcp_app = mcp.http_app(path="/mcp")`, then `app = FastAPI(lifespan=combine_lifespans(hub_lifespan, mcp_app.lifespan))` and `app.mount("/mcp", mcp_app)`. Forwarding the MCP lifespan is **mandatory** (else "task group is not initialized"). Bind to `127.0.0.1`, **and add `Origin`-header validation** (allow missing/localhost, reject foreign origins) as a small ASGI/Starlette middleware — the spec-mandated DNS-rebinding defense (D18).
-5. Enforce the visibility timeout **lazily in the claim query** (the claim also grabs `in_progress` rows older than `VISIBILITY_TIMEOUT`); optionally start a small `asyncio` loop in `hub_lifespan` as a backstop that runs both `reclaim_stale(VISIBILITY_TIMEOUT)` and `expire_messages(MESSAGE_TTL)` (the `pending kind='task'`→`expired` sweep, D6/Q3/D24) — see `design-decisions.md`, D15. The read-only `/api/peek` route (Step 3) and the shipped `hook_peek.py` complete the D19 layer; `hook_peek.py` is stdlib-only (`urllib`) and adds no dependency.
+5. Enforce the visibility timeout **lazily in the claim query** (the claim also grabs `in_progress` rows older than `VISIBILITY_TIMEOUT`); optionally start a small `asyncio` loop in `hub_lifespan` as a backstop that runs both `reclaim_stale(VISIBILITY_TIMEOUT)` and `expire_messages(MESSAGE_TTL)` (the `pending kind='task'`→`expired` sweep, D6/Q3/D24) — see `design-decisions.md`, D15. The read-only `/api/peek` route (Step 3) and the shipped `hub_peek.py` (bundled at `.claude/skills/agent-hub-live/scripts/`) complete the D19 layer; `hub_peek.py` is stdlib-only (`urllib`) and adds no dependency.
 
 ## Step 5: Automated Tests (`tests/`)
 1. DB unit tests:
@@ -103,5 +104,5 @@ Drive this with **`/run`** (launch the hub + open the dashboard) and **`/verify`
 6. Observe the web dashboard as the message populates.
 7. In Antigravity CLI, prompt: *"Register, then check your inbox (wait for work) and respond to pending messages."*
 8. Observe the response complete the loop on the dashboard, and confirm the sender sees it via `check_status`.
-9. **Wire the D19 hook layer.** Install `hook_peek.py` into both clients: Claude Code via `~/.claude/settings.json` (`Stop` / `UserPromptSubmit` running `python hook_peek.py --agent-id <id>`); Antigravity `agy` via `hooks.json` (`StopHook` / `PreInvocationHook`, with `json-hooks-enabled`). Confirm each peeks `GET /api/peek` on its trigger.
+9. **Wire the D19 hook layer.** Wire the bundled `.claude/skills/agent-hub-live/scripts/hub_peek.py` into both clients: Claude Code via **project** `.claude/settings.json` (`UserPromptSubmit` → `--mode prompt`, `Stop` → `--mode stop`, identity from `$AGENT_HUB_ID`); Antigravity `agy` via `hooks.json` (`PreInvocationHook` / `StopHook`, with `json-hooks-enabled`). Confirm each peeks `GET /api/peek` on its trigger. Full guide: `.claude/skills/agent-hub-live/SETUP.md`.
 10. **Confirm the nudge path:** send a message to an agent that is between turns, then fire its hook (finish a turn / submit a prompt) and confirm the injected "you have N messages — call `check_inbox`" nudge appears and the agent then claims via `check_inbox`. Note the honest limit — a fully idle agent waiting on a human won't see it until its next trigger.

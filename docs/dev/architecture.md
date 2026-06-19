@@ -8,7 +8,7 @@ graph TD
         subgraph Agents
             Claude[Claude Code CLI]
             Gemini[Antigravity CLI]
-            Hook[hook_peek.py<br/>Stop / PreInvocation hook]
+            Hook[hub_peek.py<br/>Stop / PreInvocation hook]
         end
 
         subgraph MCP Agent Hub
@@ -41,7 +41,7 @@ graph TD
 
 ## Component Interactions
 
-> **Layout note (D27):** application code lives in the **`mcp_hub/`** package — `mcp_hub/hub.py`, `mcp_hub/db.py`, `mcp_hub/templates/`. `run_hub.py` (the supervisor — §7) and `hook_peek.py` stay at repo root. The server is started with `python run_hub.py` (= `uvicorn mcp_hub.hub:app`). Module-internal imports are relative (`from . import db`); `templates/` is resolved module-relative (`Path(__file__).parent / "templates"`).
+> **Layout note (D27):** application code lives in the **`mcp_hub/`** package — `mcp_hub/hub.py`, `mcp_hub/db.py`, `mcp_hub/templates/`. `run_hub.py` (the supervisor — §7) stays at repo root; the client-side hook notifier `hub_peek.py` lives in the portable bundle at **`.claude/skills/agent-hub-live/scripts/`** (not repo root). The server is started with `python run_hub.py` (= `uvicorn mcp_hub.hub:app`). Module-internal imports are relative (`from . import db`); `templates/` is resolved module-relative (`Path(__file__).parent / "templates"`).
 
 ### 1. The Hub Server (`mcp_hub/hub.py`)
 This is the single entry point. It builds the FastAPI app and the FastMCP instance and mounts the MCP ASGI app at `/mcp` (Streamable HTTP). The current FastMCP 3.x pattern:
@@ -68,10 +68,10 @@ A single FastMCP middleware (`on_call_tool` hook) centralizes concerns that woul
 
 This keeps the tool bodies focused on their own DB mutation. `mcp.add_middleware(...)` runs first-added first on the way in.
 
-### 1b. Hook Peek/Nudge Layer (`hook_peek.py` + `/api/peek`)
+### 1b. Hook Peek/Nudge Layer (`hub_peek.py` + `/api/peek`)
 An **optional, client-side** layer that makes pull-based delivery feel push-like without weakening the queue (see `design-decisions.md`, D19):
 * The hub exposes a plain read-only endpoint **`GET /api/peek?agent_id=…`** on the FastAPI app (not an MCP tool), backed by `db.peek_inbox()`. It returns `{ count, senders: [...] }` mirroring what `check_inbox` would claim — but **mutates nothing** (no claim, no status change).
-* A shipped **`hook_peek.py`** (stdlib-only — `urllib`, no extra deps) is wired into each client's hooks: Claude Code `Stop` / `UserPromptSubmit` / `SessionStart` (in `~/.claude/settings.json`); Antigravity `agy` `StopHook` / `PreInvocationHook` (in `hooks.json`, gated by `json-hooks-enabled`). On its trigger it peeks and, when `count > 0`, prints a nudge to stdout that the client injects into the agent's context.
+* A shipped **`hub_peek.py`** (stdlib-only — `urllib`, no extra deps) ships in the portable bundle at **`.claude/skills/agent-hub-live/scripts/hub_peek.py`** and is wired into each client's hooks: Claude Code `UserPromptSubmit` (`--mode prompt`) / `Stop` (`--mode stop`) in **project** `.claude/settings.json`; Antigravity `agy` `PreInvocationHook` / `StopHook` (in `hooks.json`, gated by `json-hooks-enabled`). On its trigger it peeks and, when `count > 0`, prints a nudge to stdout that the client injects into the agent's context. Full wiring guide: `.claude/skills/agent-hub-live/SETUP.md`.
 * Because the hook only **peeks**, the authoritative delivery + ack path (`check_inbox` → `reply_to_message` / `fail_message`, at-least-once) is unchanged. The `Stop` / `AfkStop` variant is the most useful — it keeps an agent looping on pending work instead of going idle. *(agy's hook system was verified directly from the `agy.exe` binary — D19.)*
 
 ### 2. The Database Layer (`db.py`)

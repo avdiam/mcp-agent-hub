@@ -63,6 +63,11 @@ Broadcast must **not** let anyone flood the server/agents. Design must include:
 
 ### Notes
 - Until built, maintainer presence is discoverable via the `agent-hub-builder` description.
+- **Skill is already forward-compatible (2026-06-19).** The `agent-hub-live` `SKILL.md` loop
+  now treats unrecognized / ack-less kinds (incl. a future `announcement`) as read-only —
+  read + surface, never `reply`/`fail` — so the P1 `SKILL.md` change is a **pure additive**
+  (just naming `announcement` as a concrete example); deployed/vendored agents won't mis-ack
+  broadcasts. Removes the re-vendoring-correctness concern from propagation sequencing.
 
 ---
 

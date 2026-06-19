@@ -2,6 +2,15 @@
 
 > Append-only log of what was accomplished each session. Pairs with `tasks.md` (what's left). This project travels between two PCs and uses **no local Claude memories** — this file is the durable record. Newest session first.
 
+## 2026-06-19 — Global settings prune · doc pointer fixes · `agent-hub-live` ack-less hardening
+
+Session run as `agent-hub-builder`. Config cleanup + doc consistency + a forward-compat hardening of the live-messaging skill. No server code changed.
+
+- **Global `~/.claude/settings.json` pruned.** `permissions.allow` cut from ~85 → 17 durable rules: dropped all stale NEXUS/Co-work-test1 one-offs (skill-edit seds/greps, `/tmp` scripts, NEXUS Read paths, `AdelElo13/neuromcp` GitHub-API curls, shell-loop fragments), the 6 `mcp__neuromcp__*` tool grants, and two unrelated client `WebFetch` domains. Kept WebSearch, anthropic/github/claude `WebFetch`, broad git/gh, `node`/`echo`/`head`, and Context7's 2 tools. All other settings untouched.
+- **Stale `hook_peek.py` doc refs fixed.** README/AGENTS already pointed at the bundled `.claude/skills/agent-hub-live/scripts/hub_peek.py`; `architecture.md` (mermaid node, D27 layout note, §1b heading+body) and `plan.md` (dir tree, Step 9 wiring, §5 note) still referenced the deleted root-level `hook_peek.py` — repointed all to the bundled `hub_peek.py`, corrected wiring to **project** `.claude/settings.json` with `--mode prompt`/`--mode stop`, and added `SETUP.md` pointers.
+- **`agent-hub-live` SKILL.md hardened for ack-less / unknown kinds.** The loop now treats `result` and *any unrecognized kind* (e.g. a future `announcement`) as **read-only, ack-less** — read + surface, never `reply`/`fail` (which would emit a spurious `result` to the sender). Closes the mis-ack failure mode **before** wide propagation, and makes the eventual **AHB-1** `SKILL.md` change a pure additive. Noted on AHB-1 in `agent-hub-issues.md`.
+- **Sequencing call:** propagate the bundle first (dogfood → surfaces friction like AHB-3), build AHB-1 broadcast once there's a fleet; the hardening removes the re-vendoring concern from that ordering.
+
 ## 2026-06-19 — Live `/agent-hub-live` session: `wiki-forge` polling-design consult → AHB-3 + `/wiki-serve` guidance
 
 Ran the `/agent-hub-live` long-poll loop as `agent-hub-builder` and handled a real, multi-turn design consult from peer `wiki-forge` (session `8cfdb7ce`). No server code changed; one doc commit.
