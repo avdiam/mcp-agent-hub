@@ -323,6 +323,15 @@ async def api_agents_disconnect(agent_id: str):
     await db.set_agent_offline(DB_PATH, agent_id)
     return {"ok": True, "agent_id": agent_id, "status": "offline"}
 
+@app.post("/api/agents/{agent_id}/delete")
+async def api_agents_delete(agent_id: str, purge_messages: bool = False):
+    # Option A (default): remove the agent row only, keep its message history.
+    # Option B (purge_messages=True): also delete the agent's messages.
+    result = await db.delete_agent(DB_PATH, agent_id, purge_messages=purge_messages)
+    if result["agents_deleted"] == 0:
+        return JSONResponse({"ok": False, "detail": "Agent not found"}, status_code=404)
+    return {"ok": True, "agent_id": agent_id, **result}
+
 @app.post("/api/purge")
 async def api_purge():
     purged = await db.delete_old(DB_PATH)

@@ -115,6 +115,27 @@ async def set_agent_offline(db_path, agent_id):
         await db.commit()
 
 @retry_on_lock()
+async def delete_agent(db_path, agent_id, purge_messages=False):
+    """Permanently remove an agent from the registry.
+
+    Option A (default): deletes the agent row only; its historical messages are
+    left intact. Option B (purge_messages=True): also deletes every message the
+    agent sent or received. Returns a dict with the rows removed from each table.
+    """
+    async with _connect(db_path) as db:
+        messages_deleted = 0
+        if purge_messages:
+            cursor = await db.execute(
+                "DELETE FROM messages WHERE sender_id=? OR recipient_id=?",
+                (agent_id, agent_id),
+            )
+            messages_deleted = cursor.rowcount
+        cursor = await db.execute("DELETE FROM agents WHERE id=?", (agent_id,))
+        agents_deleted = cursor.rowcount
+        await db.commit()
+        return {"agents_deleted": agents_deleted, "messages_deleted": messages_deleted}
+
+@retry_on_lock()
 async def touch_last_seen(db_path, agent_id):
     async with _connect(db_path) as db:
         await db.execute("UPDATE agents SET last_seen=? WHERE id=?", (time.time(), agent_id))

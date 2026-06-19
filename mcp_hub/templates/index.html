@@ -562,6 +562,13 @@
                           <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5.636 5.636a9 9 0 1012.728 0M12 3v9"></path></svg>
                        </button>`;
 
+                // Permanent delete — available for every agent, including offline ones.
+                const deleteBtn = `<button onclick="confirmDeleteAgent('${escapeHtml(a.id)}')" title="Permanently delete ${escapeHtml(a.id)} from the registry"
+                          class="inline-flex items-center justify-center w-7 h-7 rounded-md bg-white/5 hover:bg-red-600/30 text-slate-400 hover:text-red-400 border border-white/10 hover:border-red-600/40 transition-all">
+                          <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"></path></svg>
+                       </button>`;
+                const actionsHtml = `<div class="flex items-center justify-center gap-1.5">${disconnectBtn}${deleteBtn}</div>`;
+
                 tr.innerHTML = `
                     <td class="px-4 py-4">
                         <div class="flex items-center gap-3 min-w-0">
@@ -580,7 +587,7 @@
                     </td>
                     <td class="px-4 py-4">${skillsHtml}</td>
                     <td class="px-4 py-4 text-right font-mono text-xs text-slate-400">${formatTime(a.last_seen)}</td>
-                    <td class="px-4 py-4 text-center">${disconnectBtn}</td>
+                    <td class="px-4 py-4 text-center">${actionsHtml}</td>
                 `;
                 tbody.appendChild(tr);
             });
@@ -1039,6 +1046,26 @@
                 fetchState();
             } catch (e) {
                 showToast(`Disconnect failed (${e.message}). Endpoint may not be deployed yet.`);
+            }
+        }
+
+        function confirmDeleteAgent(agentId) {
+            showConfirm(
+                'Permanently delete ' + agentId + '?',
+                'Removes this agent from the registry entirely. Its past messages are kept as history. ' +
+                'If the same agent registers again, it comes back as a fresh entry with no retained state. This cannot be undone.',
+                'Delete',
+                () => doDeleteAgent(agentId)
+            );
+        }
+        async function doDeleteAgent(agentId) {
+            try {
+                const res = await fetch('/api/agents/' + encodeURIComponent(agentId) + '/delete', { method: 'POST', headers: { 'Content-Type': 'application/json' } });
+                if (!res.ok) throw new Error('HTTP ' + res.status);
+                showToast(`Agent ${agentId} permanently deleted.`);
+                fetchState();
+            } catch (e) {
+                showToast(`Delete failed (${e.message}). Endpoint may not be deployed yet.`);
             }
         }
 

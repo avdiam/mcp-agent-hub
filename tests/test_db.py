@@ -164,6 +164,50 @@ async def test_expired_sweep(temp_db):
             assert statuses[msg_inprog["message_id"]] == "input_required"
 
 @pytest.mark.asyncio
+async def test_delete_agent_option_a_keeps_messages(temp_db):
+    await db.upsert_agent(temp_db, "victim", "[]")
+    await db.upsert_agent(temp_db, "peer", "[]")
+    msg = await db.enqueue_message(temp_db, "peer", "victim", "hello")
+
+    # Option A (default): agent row removed, messages preserved
+    result = await db.delete_agent(temp_db, "victim")
+    assert result == {"agents_deleted": 1, "messages_deleted": 0}
+
+    agents = await db.get_all_agents(temp_db)
+    assert [a["id"] for a in agents] == ["peer"]
+
+    # The historical message is still present
+    async with aiosqlite.connect(temp_db) as conn:
+        async with conn.execute("SELECT COUNT(*) FROM messages WHERE id=?", (msg["message_id"],)) as cursor:
+            assert (await cursor.fetchone())[0] == 1
+
+    # Deleting a non-existent agent reports zero rows removed
+    assert (await db.delete_agent(temp_db, "ghost"))["agents_deleted"] == 0
+
+@pytest.mark.asyncio
+async def test_delete_agent_option_b_purges_messages(temp_db):
+    await db.upsert_agent(temp_db, "victim", "[]")
+    await db.upsert_agent(temp_db, "peer", "[]")
+    await db.enqueue_message(temp_db, "peer", "victim", "to victim")     # victim as recipient
+    sent = await db.enqueue_message(temp_db, "peer", "peer", "self note")  # unrelated
+    await db.claim_pending(temp_db, "peer")
+    await db.complete_message(temp_db, sent["message_id"], "ok")  # produces a result to peer
+
+    # Option B: also delete every message the victim sent or received
+    result = await db.delete_agent(temp_db, "victim", purge_messages=True)
+    assert result["agents_deleted"] == 1
+    assert result["messages_deleted"] == 1  # only the one addressed to victim
+
+    # Unrelated peer<->peer messages survive
+    async with aiosqlite.connect(temp_db) as conn:
+        async with conn.execute(
+            "SELECT COUNT(*) FROM messages WHERE sender_id='victim' OR recipient_id='victim'"
+        ) as cursor:
+            assert (await cursor.fetchone())[0] == 0
+        async with conn.execute("SELECT COUNT(*) FROM messages") as cursor:
+            assert (await cursor.fetchone())[0] >= 1
+
+@pytest.mark.asyncio
 async def test_result_fan_out(temp_db):
     await db.upsert_agent(temp_db, "worker", "[]")
     await db.upsert_agent(temp_db, "requester", "[]")
