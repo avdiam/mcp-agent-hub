@@ -1,6 +1,10 @@
 # Normalize line endings to LF in the repo across both PCs (avoids CRLF churn).
 * text=auto eol=lf
 
+# Windows batch files want CRLF (LF can break label/goto parsing in cmd.exe).
+*.bat text eol=crlf
+*.cmd text eol=crlf
+
 # Keep binary artifacts untouched.
 *.png binary
 *.jpg binary

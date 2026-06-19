@@ -2,6 +2,17 @@
 
 > Append-only log of what was accomplished each session. Pairs with `tasks.md` (what's left). This project travels between two PCs and uses **no local Claude memories** — this file is the durable record. Newest session first.
 
+## 2026-06-19 — Portable, self-healing `start_hub.bat` launcher (+ cross-PC venv gotcha documented)
+
+Added a one-click Windows launcher so the hub can be started from a `.bat` on **either PC** with a single file (no per-PC duplicate, no hostname `if/else`).
+
+- **`start_hub.bat` (repo root).** Double-click or run from any dir. Resolves the project from `%~dp0` (its own location), so the path is correct on both PCs. Branches on **"is there a venv that actually runs here?"** — not on which machine — then `cd`s in and runs `run_hub.py` (the exit-42 supervisor). Prints dashboard/MCP/log URLs and keeps the window open on exit.
+- **Self-healing venv bootstrap.** If `venv\Scripts\python.exe` is missing **or fails to execute**, the bat rebuilds it (`py -m venv`, falling back to `python`) and `pip install -r requirements.txt`, then launches. First run on a fresh PC sets itself up; later runs take the fast path.
+- **🔴 Root-cause fixed — the venv didn't work on the `avdia` PC.** `venv\pyvenv.cfg` read `home = C:\Python313` + `...C:\Users\30697\...\venv`: the venv was **created on the other PC (30697, Python 3.13.5) and physically copied here**, where that base interpreter doesn't exist → `did not find executable at 'C:\Python313\python.exe'`. Since `venv/` is gitignored (machine-local, doesn't travel with git), the fix is to rebuild locally — which the bat now does automatically. Rebuilt here with this PC's **Python 3.14.5**, installed from `requirements.txt` (loose pins — works across the two PCs' Python versions; **not** the 3.13-specific `requirements-frozen.txt`). Hub verified up (HTTP 200 on `/api/peek`).
+- **cmd gotcha hit & fixed during authoring:** parentheses inside `REM` comments **within** a parenthesized `if (...)` block make cmd mis-match parens and either error (`... was unexpected at this time.`) or partially execute (one bad run actually ran the `rmdir venv` before erroring). Kept block comments paren-free; used `setlocal EnableDelayedExpansion` + `!BOOT_PY!` (a `%VAR%` set and used in the same block expands too early).
+- **`.gitattributes`:** added `*.bat`/`*.cmd text eol=crlf` so the new repo-wide `eol=lf` rule doesn't strip CRLF from batch files.
+- **Still untracked (left as-is):** `scripts/check_inbox_runner.py`.
+
 ## 2026-06-18 — Inbox Check and Wiki-Forge Interop Verification
 
 - **Harness & Permission Validation:** Handled permission requests for wildcard MCP server tools (`mcp(*)`) and analyzed configuration details. Identified that `agent-hub` is loaded as a plugin, but direct harness `call_mcp_tool` invocations were blocked due to model-environment tool discovery restrictions (throwing `tool is not enabled`).
