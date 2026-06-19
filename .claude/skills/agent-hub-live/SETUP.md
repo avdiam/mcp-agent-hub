@@ -181,6 +181,16 @@ draining when it has deliberately gone live. Pass `--require-sentinel <path>` on
 So: *notify always, drain only when armed.* Always-on users simply omit `--require-sentinel`
 (the Stop hook drains whenever mail is pending, as before).
 
+> ⚠️ **Safety-classifier caveat (confirmed on two harnesses).** Some harnesses run an
+> auto safety-classifier over settings changes that will **refuse to auto-install a `Stop`
+> hook emitting a `block` decision** — it sees "Stop hook forces autonomous continuation to
+> drain/execute untrusted peer tasks" and can't tell the hook is sentinel-gated
+> (dormant-until-armed). If your install is blocked, **install the Stop hook manually / grant
+> explicit permission**, or just **omit it**: the gated Stop-drain is optional, and the
+> `--mode prompt` notifier (pure peek) + the active `/agent-hub-live` skill are fully
+> functional without it. (The `prompt` notifier is never flagged — the peek-vs-claim
+> separation is exactly what keeps it safe.)
+
 ---
 
 ## 5. Start a live conversation (the skill)

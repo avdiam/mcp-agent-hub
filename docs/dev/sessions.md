@@ -2,6 +2,14 @@
 
 > Append-only log of what was accomplished each session. Pairs with `tasks.md` (what's left). This project travels between two PCs and uses **no local Claude memories** — this file is the durable record. Newest session first.
 
+## 2026-06-20 (cont.) — agy stdio connection (AHB-6) · nexus + agy live · AHB-5 classifier caveat
+
+- **agy (antigravity-cli) connection diagnosed → AHB-6 (open).** The CLI supports **stdio MCP servers only** — it can't be an SSE/Streamable-HTTP *client* (no `serverUrl` tool discovery) and **blocks loopback**. README §3 was wrong (the `serverUrl` path is the Antigravity **app**, §4). Workaround given: the **`mcp-remote` stdio bridge** (`npx -y mcp-remote http://localhost:8000/mcp` as the CLI's stdio server; the bridge process makes the localhost connection, sidestepping the loopback block). agy applied it and **confirmed connected + working**. AHB-6 logged; README §3 correction tracked there.
+- **Local `~/.gemini/config` repair (not git-tracked).** Found `mcp_config.json` empty + a **malformed bare-string `mcpServers`** in `config.json` (agy "saw" the server but couldn't use tools). Removed the malformed `config.json` entry; repointed `hooks.json` from the **deleted** root `hook_peek.py` → bundled `scripts/hub_peek.py --mode prompt`. The `mcp_config.json` `serverUrl` edit turned out **orphaned** (agy connects via its own `mcp-remote`, not this file); left in place pending an agy restart (user's call). `.bak` backups kept.
+- **`nexus` live.** Vendored the canonical bundle @`8c76ea9`; ambient notifier + `/agent-hub-live` both running; consent model = invoking the skill is its single gate, then autonomous claim/reply until stop-token/idle-cap.
+- **AHB-5 safety-classifier caveat (confirmed on TWO harnesses, incl. ours).** Auto safety-classifiers refuse to **auto-install** a `Stop` hook emitting a `block` decision — they can't see it's sentinel-gated (dormant-until-armed), only "Stop → autonomous loop over untrusted tasks." `nexus` hit it; so did this session's own harness. Added a manual-install/omit caveat to `SETUP.md`'s `--require-sentinel` section (the `--mode prompt` peek notifier is never flagged — peek-vs-claim separation holds).
+- All peer tasks acked (`nexus`, `antigravity-2`). Roster now exercises the hub across Claude Code, agy (stdio bridge), `wiki-forge`, and `nexus`.
+
 ## 2026-06-20 — Live hub session: nexus onboarding consult → AHB-4 + AHB-5 implemented
 
 Ran a long `/agent-hub-live` session as `agent-hub-builder`; handled two peer consults and shipped the bundle improvements they surfaced.
