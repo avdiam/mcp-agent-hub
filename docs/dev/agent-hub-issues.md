@@ -13,15 +13,16 @@
 | ID | Status | Title | Reporter | Opened |
 |----|--------|-------|----------|--------|
 | AHB-1 | scoped | Broadcast / announce capability (with flood caps) | avdia (user) | 2026-06-19 |
+| AHB-2 | open | Job-offer board: offer → claim → 2-way verify → assign/drop (P2-era) | avdia (user) | 2026-06-19 |
 
 ---
 
 ## AHB-1 — Broadcast / announce capability (with flood caps)
 
-- **Status:** scoped (plan below, 2026-06-19 — not yet implemented)
+- **Status:** scoped — **P1 confirmed & ready to build** (2026-06-19); P2 deferred. Not yet implemented.
 - **Reporter:** avdia (user)
 - **Opened:** 2026-06-19
-- **Relates to:** `tasks.md` "New features" (priorities/broadcast — to be scoped); the
+- **Relates to:** `tasks.md` "New features" (priorities/broadcast — to be scoped); [AHB-2](#ahb-2--job-offer-board-offer--claim--2-way-verify--assigndrop) (P2-era job board); the
   maintainer-announcement need (see `register_agent` description for `agent-hub-builder`).
 
 ### Problem
@@ -89,7 +90,9 @@ Broadcast must **not** let anyone flood the server/agents. Design must include:
   Abuse is prevented by rate limits + payload caps below, not by gating who may call it.
   *Optional tightening (note, not P1):* an operator kill-switch env var and/or a per-agent
   `can_broadcast` flag, evolving to the `caller_id`/auth model (D11/D23 v2).
-- **BD5 — Don't echo to sender by default.** Exclude `sender_id` from recipients.
+- **BD5 — Echo to sender (confirmed 2026-06-19).** Include the sender among recipients —
+  the sender receives its own broadcast too. (Ack-less auto-complete means the echo doesn't
+  clutter the sender's inbox.)
 - **BD6 ⚠ — P2 durability is a separate phase.** P1 reaches only the connected set.
 
 ### Data model changes
@@ -128,7 +131,7 @@ Broadcast must **not** let anyone flood the server/agents. Design must include:
 
 ### Delivery semantics
 - `kind="announcement"`, ack-less, best-effort-once (auto-complete on claim, per BD2).
-- Recipients = agents with `status != 'offline'`, minus the sender (BD3/BD5).
+- Recipients = all agents with `status != 'offline'`, **including the sender** (BD5 echo, confirmed).
 - Surfaced through the normal `check_inbox` long-poll **and** the existing `/api/peek`
   nudge — so the `UserPromptSubmit`/`Stop` notifier hooks already cover announcements with
   no change.
@@ -159,16 +162,62 @@ Broadcast must **not** let anyone flood the server/agents. Design must include:
 kinds, caps, NO_ACK_KINDS), `README.md` (tool list), the `agent-hub-live` SKILL/SETUP
 (mention broadcast), and flip this issue `scoped → in-progress → fixed`.
 
-### Open questions to confirm before coding
-1. **BD4** — keep broadcast open-to-all-with-caps (recommended, matches your ask), or
-   restrict to a maintainer allowlist for now?
-2. **BD6** — build **P1 only** now and defer P2 (recommended), or commit to P2 durability up front?
-3. Are the **default cap numbers** (30 s cooldown, 10/hour, 4 KB) acceptable?
-4. Echo broadcasts back to the sender? (default **no**.)
-5. Ack-less auto-complete-on-claim acceptable for announcements (vs. a no-claim side channel)?
+### Confirmed answers (2026-06-19) — P1 ready to build
+1. **BD4 — open-to-all-with-caps.** ✅ Confirmed. No allowlist; abuse controlled by caps only.
+2. **Scope — P1 first, then P2.** ✅ Build P1, get its tests green, **then** take up P2
+   durability (and the AHB-2 job board) as a follow-up phase.
+3. **Cap defaults** (30 s cooldown, 10/hour, 4 KB payload, 200 recipients). ✅ Accepted.
+4. **Echo to sender.** ✅ **Yes** — the sender receives its own broadcast (BD5 updated).
+5. **Ack-less auto-complete-on-claim.** ✅ Accepted for now; revisit during P2.
+
+→ **P1 is fully specified and unblocked.** Implement when the user gives the go-ahead.
 
 ### Rough sequencing / effort
 - **P1:** `broadcasts` table + `broadcast()` + caps + `broadcast_message` tool +
   `NO_ACK_KINDS`/TTL tweaks + tests + docs — **small-to-medium**, no breaking changes.
 - **P2:** announcements tables + read-cursor + deliver-on-register/`get_announcements` +
   `/api/broadcast` + dashboard + TTL — **medium**.
+
+---
+
+## AHB-2 — Job-offer board (offer → claim → 2-way verify → assign/drop)
+
+- **Status:** open — idea captured 2026-06-19; **analyze/design during the P2 timeframe**,
+  after AHB-1 P1 lands and its tests pass. Do NOT build yet.
+- **Reporter:** avdia (user)
+- **Opened:** 2026-06-19
+- **Relates to:** [AHB-1](#ahb-1--broadcast--announce-capability-with-flood-caps) P2; `tasks.md`
+  dogfood / new-features.
+
+### Concept
+A lightweight job/task marketplace on the hub:
+1. An agent posts a **job offer** — work open to *anyone*, not addressed to a specific
+   recipient (announcement/broadcast-style), describing the task + the skills it needs.
+2. Any **relevant or free** agent can **submit/claim** it (express intent to take it).
+3. A **two-way verification** handshake between poster and claimant confirms the match
+   (both sides explicitly accept).
+4. On agreement the offer is **marked assigned** and removed from the open board so no one
+   else picks it up; if no match (withdrawn / claimant declines / times out) it is **dropped**.
+
+### Why it's distinct from AHB-1
+AHB-1 broadcast is fire-and-forget one-to-many *information*. This is a stateful,
+**claimable work item** with a lifecycle (open → claimed → verifying → assigned/dropped),
+**competition** among multiple claimants, and a **mutual-accept** step — closer to a task
+queue / auction than to an announcement. It likely builds *on top of* AHB-1's broadcast for
+the "post to everyone" step, then adds the claim+verify state machine.
+
+### Design seeds to analyze later (NOT decisions)
+- New entity, e.g. `job_offer(id, poster_id, required_skills, payload, status, claimant_id,
+  created_at, expires_at)` — a dedicated table + tools, possibly with a `kind="job_offer"`
+  for the broadcast step.
+- **Discovery:** skills-match vs. browse-the-board; ties into `skills` + `list_agents`.
+- **Concurrency / no double-assign:** first-claim-wins vs. poster-selects-among-claimants;
+  atomic claim like `claim_pending`.
+- **Two-way verification protocol:** reuse the `request_input`/`reply` handshake, or a
+  dedicated accept/confirm pair.
+- **Lifecycle / TTL:** auto-drop stale offers; allow withdraw; re-open if the claimant fails.
+- **Anti-abuse:** caps consistent with AHB-1; keep compatible with the future
+  `caller_id`/auth model (D11/D23 v2).
+
+### Next step
+Analyze & scope during P2 (after AHB-1 P1 ships and tests are green). **No work now.**

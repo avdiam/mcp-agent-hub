@@ -2,7 +2,7 @@
 
 > **This file is the source of truth for what's left to do.** This project travels between two PCs and uses **no local Claude memories** — anything worth preserving lives here (pending work) or in `sessions.md` (history of what's done). Update both in the same change as the work.
 
-> **▶ START HERE (next session).** v1 post-v1 polish is **complete, committed, and verified.** Steps 1–6 are fully done, including README install fixes, test-agent cleanups, MCP Inspector CLI smoke checks, and the D28 decision-log entry. **Next actions:** Triage v2 items to pull forward (e.g. DB connection pooling/long-lived connections, condition-notify long-poll, persisted events table, cascade-expire parked tasks). Skim the newest `sessions.md` entry first.
+> **▶ START HERE (next session).** v1 post-v1 polish is **complete, committed, and verified.** Steps 1–6 are fully done, including README install fixes, test-agent cleanups, MCP Inspector CLI smoke checks, and the D28 decision-log entry. **Next actions:** **Top candidate — implement AHB-1 P1** (broadcast/announce: `broadcast_message` tool, fan-out as ack-less `kind="announcement"`, flood caps + `broadcasts` audit table). It is **scoped and all design questions confirmed** in [`agent-hub-issues.md`](agent-hub-issues.md) — awaiting the user's go-ahead to build; get P1 tests green before starting P2. Otherwise triage v2 items (DB connection pooling, condition-notify long-poll, persisted events table, cascade-expire parked tasks). Skim the newest `sessions.md` entry first.
 
 ## Roadmap / Product Direction (set 2026-06-18)
 
