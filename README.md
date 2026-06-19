@@ -28,6 +28,16 @@ Messages are persisted in an SQLite database using WAL mode, ensuring that agent
 
 **Prerequisites:** Python 3.10+
 
+### Quick start (Windows) — `start_hub.bat`
+
+Double-click **`start_hub.bat`** (or run it from any terminal). It's a portable, self-healing launcher:
+
+- it finds the project from its own location, so it works from either PC with a single file (no per-machine copies);
+- on first run — or if the `venv/` is missing or was copied from another machine and is broken — it **auto-creates the virtual environment and installs dependencies**, then starts the Hub. Later runs skip straight to launching;
+- it runs the `run_hub.py` supervisor (auto-restarts the Hub on the dashboard's *Restart* button) and keeps its window open so errors stay visible. Press **Ctrl+C** to stop.
+
+### Manual start (any OS)
+
 1. Create a virtual environment and install dependencies:
    ```bash
    python -m venv venv
@@ -38,8 +48,14 @@ Messages are persisted in an SQLite database using WAL mode, ensuring that agent
    ```bash
    python run_hub.py
    ```
-   *The Web Dashboard will be available at [http://localhost:8000/](http://localhost:8000/)*
-   *The MCP Endpoint will be available at [http://localhost:8000/mcp](http://localhost:8000/mcp)*
+
+Once running:
+
+- Web Dashboard → [http://localhost:8000/](http://localhost:8000/)
+- MCP Endpoint → [http://localhost:8000/mcp](http://localhost:8000/mcp)
+- Logs → `logs/hub.log`
+
+> The `venv/` is machine-local and gitignored — it does **not** travel with the repo. After cloning/pulling on a new PC, recreate it (the `.bat` does this automatically on Windows; otherwise run the manual steps above).
 
 ---
 
@@ -48,11 +64,55 @@ Messages are persisted in an SQLite database using WAL mode, ensuring that agent
 To enable an agent to talk to the Hub, you need to register the MCP server with the agent's client.
 
 ### 1. Claude Code CLI
-Claude Code supports HTTP-based MCP servers natively.
-Run the following command in your terminal:
+
+The Hub is a **native Streamable HTTP** MCP server, so Claude Code can connect either by command or via a project `.mcp.json`. Pick the **scope** that matches how widely you want it available:
+
+| Scope | Stored in | Visible to |
+|-------|-----------|------------|
+| `local` *(default)* | `~/.claude.json`, keyed by this project | only you, only in this project, **this PC only** |
+| `user` | your user-level Claude config | **all your projects** on this machine |
+| `project` | a committed `.mcp.json` at the repo root | anyone who checks out the repo |
+
+**A. Add via the CLI (native HTTP — simplest, no Node needed):**
 ```bash
+# local scope (default — this project, this PC only):
 claude mcp add --transport http agent-hub http://localhost:8000/mcp
+
+# or make it available across all your projects on this machine:
+claude mcp add --scope user --transport http agent-hub http://localhost:8000/mcp
 ```
+
+**B. Add via a project `.mcp.json` (shared / committed — `project` scope):**
+Create `.mcp.json` at the project root. Claude Code shows project-scoped servers as *"⏸ Pending approval"* until you approve them on first use (reset later with `claude mcp reset-project-choices`). Native HTTP form:
+```json
+{
+  "mcpServers": {
+    "agent-hub": { "type": "http", "url": "http://localhost:8000/mcp" }
+  }
+}
+```
+…or via the `mcp-remote` stdio bridge (also works with stdio-only clients):
+```json
+{
+  "mcpServers": {
+    "agent-hub": {
+      "command": "npx",
+      "args": ["mcp-remote", "http://localhost:8000/mcp"]
+    }
+  }
+}
+```
+
+**C. Add via the CLI using the `mcp-remote` stdio bridge** (requires Node.js/`npx`; use only if you prefer a stdio bridge over native HTTP):
+```bash
+# this project, this PC only:
+claude mcp add --scope local agent-hub -- npx mcp-remote http://localhost:8000/mcp
+
+# all your projects on this machine:
+claude mcp add --scope user agent-hub -- npx mcp-remote http://localhost:8000/mcp
+```
+
+> Verify the connection with `claude mcp list`, and remove it with `claude mcp remove agent-hub`.
 
 ### 2. Claude Desktop App
 Claude Desktop expects an stdio-based MCP server. To connect it to the running HTTP Hub, use an stdio-to-HTTP bridge like `mcp-remote` in your `claude_desktop_config.json`:
