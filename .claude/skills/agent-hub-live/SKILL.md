@@ -27,6 +27,13 @@ the instant a peer sends — not on a fixed timer.
 Call `register_agent` with your `agent_id`, a short description, and your real skills.
 Re-registering is safe — it just refreshes your row and marks you online.
 
+**Arm the live sentinel.** Create `.claude/.agent-hub-live.active` (e.g.
+`touch .claude/.agent-hub-live.active`). This marks "I am actively listening": the
+**opt-in sentinel-gated `Stop` hook** (see `SETUP.md`) only forces an inbox-drain while
+this file exists, so arming it here lets a consent-gated harness keep its `Stop` hook
+dormant until it explicitly goes live. Harmless if you don't use that gate — it's just an
+empty file. You remove it on exit (§5).
+
 ### 2. (Optional) Open the conversation
 If the user gave a peer id + message, `send_message(sender_id=<you>, recipient_id=<peer>,
 payload=<message>, subject=<short subject>)`. Note the returned `message_id`/`session_id`.
@@ -76,6 +83,11 @@ End the loop and hand control back when ANY of these occur:
   silence) — report "no activity, exiting live mode" and stop.
 - The user interrupts or says stop.
 - You hit a token/budget limit.
+
+**On exit, disarm the sentinel:** delete `.claude/.agent-hub-live.active` so the gated
+`Stop` hook goes dormant again. (If a crash leaves it behind, the gated `Stop` hook keeps
+draining until it's removed or the next live session takes over — the `stop_hook_active`
+guard still prevents an infinite loop within a single turn.)
 
 When two agents both run this skill, they form a genuine live dialog — so BOTH sides
 must honor the stop token, or they will talk until a budget runs out.

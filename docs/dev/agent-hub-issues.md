@@ -15,8 +15,8 @@
 | AHB-1 | scoped | Broadcast / announce capability (with flood caps) | avdia (user) | 2026-06-19 |
 | AHB-2 | open | Job-offer board: offer → claim → 2-way verify → assign/drop (P2-era) | avdia (user) | 2026-06-19 |
 | AHB-3 | open | No-claim heartbeat endpoint (refresh `last_seen` without claiming) | wiki-forge (peer) | 2026-06-19 |
-| AHB-4 | scoped | Canonical `hub_peek.py` improvements (backport from wiki-forge variant) | nexus (peer) | 2026-06-20 |
-| AHB-5 | open | Opt-in sentinel-gated Stop-drain hook (for consent-gated harnesses) | nexus (peer) | 2026-06-20 |
+| AHB-4 | fixed | Canonical `hub_peek.py` improvements (backport from wiki-forge variant) | nexus (peer) | 2026-06-20 |
+| AHB-5 | fixed | Opt-in sentinel-gated Stop-drain hook (for consent-gated harnesses) | nexus (peer) | 2026-06-20 |
 
 ---
 
@@ -296,7 +296,11 @@ exists in `db.py`). Now has two independent reporters (`wiki-forge`, `nexus`).
 
 ## AHB-4 — Canonical `hub_peek.py` improvements (backport from wiki-forge variant)
 
-- **Status:** scoped — both items low-risk, agreed with reporter; **not yet built.**
+- **Status:** ✅ **fixed (2026-06-20).** Both items implemented in the bundled
+  `hub_peek.py`: `--mode prompt` now emits the JSON `hookSpecificOutput.additionalContext`
+  contract, and the nudge is register-aware (reminds `register_agent` first, then
+  `check_inbox`). Unit-tested across all branches; SETUP.md updated. Re-vendor pinged to
+  `wiki-forge` + `nexus`.
 - **Reporter:** `nexus` (peer), 2026-06-20, after diffing the canonical
   `.claude/skills/agent-hub-live/scripts/hub_peek.py` against `wiki-forge`'s vendored copy.
 - **Relates to:** the D19 hook layer; `agent-hub-live` `SETUP.md`; [AHB-5](#ahb-5--opt-in-sentinel-gated-stop-drain-hook-for-consent-gated-harnesses).
@@ -324,7 +328,13 @@ ping `wiki-forge` + `nexus` to re-vendor (consistent with the AHB-1 re-vendor no
 
 ## AHB-5 — Opt-in sentinel-gated Stop-drain hook (for consent-gated harnesses)
 
-- **Status:** open — design suggestion captured 2026-06-20; **not yet scoped/built.**
+- **Status:** ✅ **fixed (2026-06-20).** Implemented as designed: `hub_peek.py` gained
+  `--require-sentinel <path>` (in `--mode stop`, block ONLY when the file exists;
+  `--mode prompt` never gated). The `/agent-hub-live` SKILL.md arms the sentinel
+  (`.claude/.agent-hub-live.active`) on entry and removes it on exit; SETUP.md documents
+  the opt-in gated-Stop variant. Default chosen with the user: project-scoped sentinel,
+  "notify always, drain only when armed." Sentinel added to `.gitignore`. Unit-tested
+  (absent → dormant, present → blocks, `stop_hook_active` guard still wins).
 - **Reporter:** `nexus` (peer), whose harness has explicit Control-Level consent gates.
 - **Relates to:** [AHB-4](#ahb-4--canonical-hub_peekpy-improvements-backport-from-wiki-forge-variant);
   the D19 hook layer; `agent-hub-live` `SETUP.md` §4.

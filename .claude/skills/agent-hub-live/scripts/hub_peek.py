@@ -12,15 +12,21 @@ Designed to be dropped into ANY project unchanged:
 
 Two modes, because Claude Code treats hook stdout differently per event:
 
-  --mode prompt   (UserPromptSubmit)  -> print the nudge as PLAIN TEXT on stdout.
-                  Claude injects plain stdout from a UserPromptSubmit hook into
-                  the turn's context, so a bare print is enough.
+  --mode prompt   (UserPromptSubmit)  -> emit the documented JSON contract
+                  {"hookSpecificOutput":{"hookEventName":"UserPromptSubmit",
+                  "additionalContext": <nudge>}}. Claude injects additionalContext
+                  into the turn. (Bare stdout is also injected today, but the JSON
+                  form is the explicit, forward-compatible contract.)
 
   --mode stop     (Stop)              -> print JSON {"decision":"block",...}.
                   A Stop hook's plain stdout is IGNORED; only a JSON block
                   decision keeps the agent going. We block once so the agent
                   drains its inbox before yielding, and guard `stop_hook_active`
                   (sent by Claude on the hook's stdin) to avoid infinite loops.
+                  Opt-in gate: pass --require-sentinel <path> and the drain fires
+                  ONLY when that file exists, so a consent-gated harness keeps the
+                  Stop-drain dormant until its live skill arms the sentinel. The
+                  --mode prompt notifier is pure (non-claiming) and never gated.
 
 Exit code is always 0: a notifier must never break the user's turn. If the hub
 is down or there is no mail, we stay silent and exit 0 (allow normal flow).
@@ -47,13 +53,14 @@ def peek(agent_id: str, hub_url: str):
     return 0, []
 
 
-def nudge_text(count: int, senders: list) -> str:
+def nudge_text(count: int, senders: list, agent_id: str) -> str:
     who = ", ".join(senders) if senders else "unknown"
     noun = "message" if count == 1 else "messages"
     return (
         f"[HUB NOTIFICATION] You have {count} pending {noun} in your agent-hub "
-        f"inbox (from {who}). Use the 'check_inbox' tool to read and handle them "
-        f"before stopping."
+        f"inbox (from {who}). If you have not registered this session, call "
+        f"'register_agent' (agent_id='{agent_id}') first, then use 'check_inbox' "
+        f"to read and handle them before stopping."
     )
 
 
@@ -73,7 +80,12 @@ def main() -> int:
     parser.add_argument("--hub-url", default=os.environ.get("AGENT_HUB_URL", "http://127.0.0.1:8000"),
                         help="Hub base url (default: $AGENT_HUB_URL or http://127.0.0.1:8000).")
     parser.add_argument("--mode", choices=["prompt", "stop"], default="prompt",
-                        help="prompt = plain stdout (UserPromptSubmit); stop = JSON block decision (Stop).")
+                        help="prompt = JSON additionalContext (UserPromptSubmit); stop = JSON block decision (Stop).")
+    parser.add_argument("--require-sentinel", default=None,
+                        help="Path to a sentinel file. In --mode stop, only block (drain) when "
+                             "this file exists; if it is absent, allow the stop. Lets a "
+                             "consent-gated harness keep the Stop-drain dormant until its live "
+                             "skill arms the sentinel. No effect on --mode prompt.")
     args = parser.parse_args()
 
     hook_input = read_hook_input()
@@ -91,14 +103,23 @@ def main() -> int:
     if count <= 0:
         return 0  # No mail: allow normal flow in both modes.
 
-    message = nudge_text(count, senders)
+    message = nudge_text(count, senders, args.agent_id)
 
     if args.mode == "stop":
+        # Opt-in consent gate: only force the drain when armed (sentinel present).
+        # Keeps a gated harness's Stop hook dormant until its live skill arms it.
+        if args.require_sentinel and not os.path.exists(args.require_sentinel):
+            return 0
         # JSON block decision is the ONLY thing a Stop hook honors.
         print(json.dumps({"decision": "block", "reason": message}))
     else:
-        # UserPromptSubmit: plain stdout is injected into context.
-        print(message)
+        # UserPromptSubmit: emit the documented JSON additionalContext contract.
+        print(json.dumps({
+            "hookSpecificOutput": {
+                "hookEventName": "UserPromptSubmit",
+                "additionalContext": message,
+            }
+        }))
     return 0
 
 

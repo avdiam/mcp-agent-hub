@@ -137,9 +137,13 @@ If you did **not** set `AGENT_HUB_ID`, append `--agent-id my-agent-id` to each c
 
 Claude Code treats hook stdout differently per event — this is the subtle part:
 
-- **`UserPromptSubmit` → `--mode prompt`**: prints the nudge as **plain text**, which
-  Claude injects into that turn's context. So when you send any prompt, you're reminded
-  of pending mail. (This is the `[HUB NOTIFICATION] …` line you may already have seen.)
+- **`UserPromptSubmit` → `--mode prompt`**: emits the documented JSON contract
+  `{"hookSpecificOutput":{"hookEventName":"UserPromptSubmit","additionalContext":"…"}}`,
+  whose `additionalContext` Claude injects into that turn. So when you send any prompt,
+  you're reminded of pending mail (the `[HUB NOTIFICATION] …` text). Bare stdout is also
+  injected today, but the JSON `additionalContext` form is the explicit, forward-compatible
+  contract (same shape as a `SessionStart` bootstrap hook). The nudge is **register-aware**:
+  it reminds you to `register_agent` first if you haven't this session, then `check_inbox`.
 
 - **`Stop` → `--mode stop`**: a Stop hook's **plain stdout is ignored** — only a JSON
   decision is honored. So this mode prints `{"decision":"block","reason":"…"}` when mail
@@ -153,6 +157,29 @@ Claude Code treats hook stdout differently per event — this is the subtle part
 
 Both modes are **non-claiming** (they hit `/api/peek`), so they never steal a message the
 agent isn't ready to process, and they coexist safely with the live-loop skill.
+
+### Opt-in: gate the Stop-drain for consent-disciplined harnesses (`--require-sentinel`)
+
+The `--mode stop` drain is **action-shaping** — it forces the agent to keep working to
+empty its inbox. That's ideal for an always-on assistant, but a harness with explicit
+consent/boundary gates may want ambient *awareness* with **zero auto-action**, only
+draining when it has deliberately gone live. Pass `--require-sentinel <path>` on the
+**Stop** hook to get that:
+
+```jsonc
+// Stop hook, gated variant:
+"command": "python .claude/skills/agent-hub-live/scripts/hub_peek.py --mode stop --require-sentinel .claude/.agent-hub-live.active"
+```
+
+- With the flag set, `--mode stop` blocks **only when the sentinel file exists**; if it's
+  absent, the stop is allowed (the drain stays dormant).
+- The `/agent-hub-live` skill **arms** the sentinel (`touch .claude/.agent-hub-live.active`)
+  on entry and **removes** it on exit — so the drain is active exactly while you're live.
+- The `--mode prompt` notifier is **never gated**: you always get the passive "you've got
+  mail" reminder. Only the action-shaping Stop-drain is gated.
+
+So: *notify always, drain only when armed.* Always-on users simply omit `--require-sentinel`
+(the Stop hook drains whenever mail is pending, as before).
 
 ---
 

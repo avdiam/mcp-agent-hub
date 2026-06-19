@@ -2,6 +2,19 @@
 
 > Append-only log of what was accomplished each session. Pairs with `tasks.md` (what's left). This project travels between two PCs and uses **no local Claude memories** — this file is the durable record. Newest session first.
 
+## 2026-06-20 — Live hub session: nexus onboarding consult → AHB-4 + AHB-5 implemented
+
+Ran a long `/agent-hub-live` session as `agent-hub-builder`; handled two peer consults and shipped the bundle improvements they surfaced.
+
+- **`nexus` onboarding consult.** New peer (markdown LLM harness, consent-gated). Answered two questions in depth: (1) ambient polling hooks — peek-don't-claim via `/api/peek`, `UserPromptSubmit` nudge + `Stop` JSON-block drain with the `stop_hook_active` guard, full poller script + settings.json; (2) `agent-hub-live` skill structure — loop states, claimed-message ack contract, `session_id` threading, gotchas. Mapped it to their consent model (run the hook always-on as pure notifier; gate the active skill).
+- **`nexus` feedback → AHB-4/AHB-5 logged then FIXED.** `nexus` diffed canonical `hub_peek.py` vs `wiki-forge`'s copy and reported: (a) `--mode prompt` should emit the JSON `hookSpecificOutput.additionalContext` contract not bare stdout; (b) register-aware nudge; (c) sentinel-gate the action-shaping Stop-drain for consent-gated harnesses; (d) `flagged_stale:1` on brand-new messages.
+  - **AHB-4 (fixed):** `hub_peek.py` `--mode prompt` now emits JSON `additionalContext`; nudge reminds `register_agent` first then `check_inbox`.
+  - **AHB-5 (fixed):** added `--require-sentinel <path>` (block on `--mode stop` only when the file exists; prompt never gated). SKILL.md arms `.claude/.agent-hub-live.active` on entry / removes on exit; SETUP.md documents the opt-in gated-Stop variant; sentinel `.gitignore`d. Default (with user): project-scoped sentinel, "notify always, drain only when armed."
+  - Unit-tested all branches (prompt JSON + register-aware; stop ungated blocks; gated absent→dormant, present→blocks; `stop_hook_active` guard). Pinged `wiki-forge` + `nexus` to re-vendor.
+  - **(d) = AHB-3, not new.** `flagged_stale` on fresh messages is the sender-side symptom of the ambient-hook presence-decay (D23 + `/api/peek` doesn't touch `last_seen`). Added `nexus` as a 2nd independent reporter on AHB-3 + priority bump.
+- **Live-mode latency lesson (documented for ourselves).** "Live" = active long-poll *within a turn* + `ScheduleWakeup` across turns. Between turns the session is dormant; the hub is **pull-only** with **no push channel** to wake the harness — so a long heartbeat means mail waits until the next scheduled wake or a user prompt. Earlier claim that "new mail auto-wakes me" was wrong and corrected. Use a short (~90s) `ScheduleWakeup` cadence for responsiveness, long heartbeat to conserve.
+- **Earlier in session (committed `de36a98`, `52b5d34`):** ack-less-kinds hardening of SKILL.md; stale `hook_peek.py` doc-ref fixes in architecture.md/plan.md; global `~/.claude/settings.json` allow-list prune (~85→17); AHB-3/4/5 intake.
+
 ## 2026-06-19 — Global settings prune · doc pointer fixes · `agent-hub-live` ack-less hardening
 
 Session run as `agent-hub-builder`. Config cleanup + doc consistency + a forward-compat hardening of the live-messaging skill. No server code changed.

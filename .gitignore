@@ -11,6 +11,9 @@ hub.db
 hub.db-wal
 hub.db-shm
 
+# agent-hub-live sentinel (runtime: armed while a live session is listening — AHB-5)
+.claude/.agent-hub-live.active
+
 # Local tooling / OS
 .env
 .DS_Store
