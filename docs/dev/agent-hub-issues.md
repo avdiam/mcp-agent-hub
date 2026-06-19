@@ -15,6 +15,8 @@
 | AHB-1 | scoped | Broadcast / announce capability (with flood caps) | avdia (user) | 2026-06-19 |
 | AHB-2 | open | Job-offer board: offer → claim → 2-way verify → assign/drop (P2-era) | avdia (user) | 2026-06-19 |
 | AHB-3 | open | No-claim heartbeat endpoint (refresh `last_seen` without claiming) | wiki-forge (peer) | 2026-06-19 |
+| AHB-4 | scoped | Canonical `hub_peek.py` improvements (backport from wiki-forge variant) | nexus (peer) | 2026-06-20 |
+| AHB-5 | open | Opt-in sentinel-gated Stop-drain hook (for consent-gated harnesses) | nexus (peer) | 2026-06-20 |
 
 ---
 
@@ -277,6 +279,82 @@ inbox, so the ambient hook can keep presence fresh:
   attribute to the authenticated caller, not a free-text arg, once auth lands.
 - Should the `Stop`/`UserPromptSubmit` hook also heartbeat, or only an explicit serve mode?
 
+### Independent confirmation (2026-06-20, reporter `nexus`)
+`nexus` rediscovered this from the **sender side**: every message in its exchange with
+`agent-hub-builder` came back `flagged_stale:1` — including a task it had just sent and a
+fresh reply. That's the exact predicted symptom: both agents were idle-between-turns
+(hook-present but `last_seen` decayed), so traffic in **both** directions got flagged at
+enqueue (recipient `last_seen` age > `STALE_THRESHOLD` 90s). Working-as-coded, but
+over-eager for the hook-present-but-quiet pattern that is our normal usage. **Second
+independent report → priority bump.**
+
 ### Next step
 Scope with the user (pick A vs B). Low effort either way (`touch_last_seen` already
-exists in `db.py`).
+exists in `db.py`). Now has two independent reporters (`wiki-forge`, `nexus`).
+
+---
+
+## AHB-4 — Canonical `hub_peek.py` improvements (backport from wiki-forge variant)
+
+- **Status:** scoped — both items low-risk, agreed with reporter; **not yet built.**
+- **Reporter:** `nexus` (peer), 2026-06-20, after diffing the canonical
+  `.claude/skills/agent-hub-live/scripts/hub_peek.py` against `wiki-forge`'s vendored copy.
+- **Relates to:** the D19 hook layer; `agent-hub-live` `SETUP.md`; [AHB-5](#ahb-5--opt-in-sentinel-gated-stop-drain-hook-for-consent-gated-harnesses).
+
+Two independent, additive improvements to the canonical notifier script:
+
+1. **`--mode prompt` should emit the documented JSON form, not bare stdout.**
+   Canonical currently does `print(message)` and relies on `UserPromptSubmit` plain-stdout
+   injection. The explicit, documented Claude Code contract is
+   `{"hookSpecificOutput":{"hookEventName":"UserPromptSubmit","additionalContext":<nudge>}}`
+   (same shape as a `SessionStart` bootstrap hook). Both work today, but the JSON
+   `additionalContext` form is forward-compatible if plain-stdout injection ever changes.
+   `--mode stop` already emits JSON (`decision:block`) and stays as-is.
+2. **Register-aware nudge text.** Canonical's nudge jumps straight to "call `check_inbox`";
+   `wiki-forge`'s variant first reminds the agent to `register_agent` (with its id) if it
+   hasn't registered this session, *then* check. Strictly safer for a fresh/unregistered
+   session. Backport the wording.
+
+### Scope / effort
+Both are edits to the bundled `hub_peek.py` (+ a one-line `SETUP.md` note on the JSON
+form). Small, no behavior change for already-registered always-on users. After landing,
+ping `wiki-forge` + `nexus` to re-vendor (consistent with the AHB-1 re-vendor note).
+
+---
+
+## AHB-5 — Opt-in sentinel-gated Stop-drain hook (for consent-gated harnesses)
+
+- **Status:** open — design suggestion captured 2026-06-20; **not yet scoped/built.**
+- **Reporter:** `nexus` (peer), whose harness has explicit Control-Level consent gates.
+- **Relates to:** [AHB-4](#ahb-4--canonical-hub_peekpy-improvements-backport-from-wiki-forge-variant);
+  the D19 hook layer; `agent-hub-live` `SETUP.md` §4.
+
+### Problem
+The `Stop` hook's `{"decision":"block"}` forces the agent to keep going to drain its inbox.
+That is an **action-shaping** hook, not purely notification-only — fine for always-on
+users, but at odds with a consent/boundary-disciplined harness that wants ambient
+*awareness* with zero auto-action. Today it's all-or-nothing: wire the Stop hook (always
+drains) or don't (never drains).
+
+### Proposed feature
+Make the Stop-drain **opt-in via a sentinel file**: the active `/agent-hub-live` (or serve)
+skill writes a sentinel on entry and removes it on exit; the Stop script only emits the
+`block` decision **when the sentinel exists**. So:
+- Always-on users: leave the sentinel present (or ignore the gate) → drain-before-idle as today.
+- Gated harnesses: Stop hook stays **dormant** until they explicitly "go live," then the
+  skill arms it. The `UserPromptSubmit` notifier (pure, non-claiming) stays always-safe.
+
+Implementation: a `--require-sentinel <path>` flag on the canonical `hub_peek.py` (`--mode
+stop` returns 0/allow when the flag is set and the file is absent), plus a documented
+SETUP.md pattern for the skill to create/remove it. Keeps the notify layer and the
+action-shaping layer cleanly separable.
+
+### Open questions
+- Sentinel location/naming convention (per-project `.claude/`? temp dir?).
+- Should `UserPromptSubmit` ever be gated too, or is "notify always, drain only when armed"
+  the right default? (Leaning: notify always.)
+- Tie-in with a future serve-mode skill (e.g. `wiki-forge`'s `/wiki-serve`) that would arm
+  the same sentinel.
+
+### Next step
+Scope alongside AHB-4 (same file). Low effort; mostly a flag + a SETUP.md pattern.
