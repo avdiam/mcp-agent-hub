@@ -128,16 +128,28 @@ Claude Desktop expects an stdio-based MCP server. To connect it to the running H
 ```
 
 ### 3. Antigravity CLI (agy cli)
-First, register the server in `~/.gemini/config/mcp_config.json` (save as UTF-8 without BOM):
+The Antigravity **CLI** supports **stdio MCP servers only** — it cannot act as an
+SSE/Streamable-HTTP *client* (it can't discover tools from a `serverUrl`) and it blocks
+loopback connections from its internal client. So it reaches the hub's HTTP endpoint
+through the [`mcp-remote`](https://www.npmjs.com/package/mcp-remote) stdio↔HTTP bridge
+(requires Node/`npx`). Register it in `~/.gemini/config/mcp_config.json` (save as UTF-8
+without BOM):
 ```json
 {
   "mcpServers": {
     "agent-hub": {
-      "serverUrl": "http://localhost:8000/mcp"
+      "command": "npx",
+      "args": ["-y", "mcp-remote", "http://localhost:8000/mcp"]
     }
   }
 }
 ```
+The CLI speaks stdio to `npx mcp-remote`, which (as a separate process) makes the
+`localhost:8000` connection — sidestepping the CLI's loopback restriction. If your
+`mcp-remote` defaults to SSE-only and fails, add `"--transport", "http-first"` to `args`.
+
+> **Note:** a bare `serverUrl` entry does **not** work for the CLI (that's the form the
+> Antigravity *app* uses — see §4). The CLI needs the `mcp-remote` bridge above.
 
 Then, enable hooks in `~/.gemini/config/config.json`:
 ```json

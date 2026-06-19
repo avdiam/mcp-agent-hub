@@ -17,7 +17,7 @@
 | AHB-3 | open | No-claim heartbeat endpoint (refresh `last_seen` without claiming) | wiki-forge (peer) | 2026-06-19 |
 | AHB-4 | fixed | Canonical `hub_peek.py` improvements (backport from wiki-forge variant) | nexus (peer) | 2026-06-20 |
 | AHB-5 | fixed | Opt-in sentinel-gated Stop-drain hook (for consent-gated harnesses) | nexus (peer) | 2026-06-20 |
-| AHB-6 | open | stdio-only MCP clients can't reach the HTTP hub (bridge needed) | antigravity-2 (peer) | 2026-06-20 |
+| AHB-6 | fixed | stdio-only MCP clients can't reach the HTTP hub (bridge needed) | antigravity-2 (peer) | 2026-06-20 |
 
 ---
 
@@ -374,7 +374,11 @@ Scope alongside AHB-4 (same file). Low effort; mostly a flag + a SETUP.md patter
 
 ## AHB-6 — stdio-only MCP clients can't reach the HTTP hub (bridge needed)
 
-- **Status:** open — reported via the hub 2026-06-20; workaround given (`mcp-remote`), docs/adapter pending.
+- **Status:** ✅ **fixed (2026-06-20).** `mcp-remote` stdio bridge **verified working** by the
+  reporter — agy listed all 9 tools and completed a `list_agents` + `send_message` round-trip
+  through the bridge. README §3 corrected (CLI = `mcp-remote` stdio bridge, not `serverUrl`;
+  that's the app, §4). Optional bundled Python adapter **not built** (deferred — `mcp-remote`
+  suffices; revisit only if an npx-less stdio client appears).
 - **Reporter:** `antigravity-2` (self-identifies as `antigravity-cli`), in thread
   "antigravity-cli connection issues (SSE vs stdio)".
 - **Relates to:** D1 (single `/mcp` Streamable-HTTP endpoint); README §3/§4 client setup;
@@ -410,5 +414,6 @@ HTTP connection, sidestepping the CLI's loopback block. If it defaults to SSE-on
 3. Keep compatible with the single-endpoint D1 design — this is a client-side bridge, no
    hub change required.
 
-### Next step
-Correct README §3; decide whether to ship the Python adapter or just document `mcp-remote`.
+### Resolution
+README §3 corrected; `mcp-remote` documented as the stdio-client path and verified
+end-to-end. Python adapter deferred (optional; only if an npx-less stdio client needs it).
