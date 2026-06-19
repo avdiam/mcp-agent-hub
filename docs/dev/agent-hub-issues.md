@@ -14,6 +14,7 @@
 |----|--------|-------|----------|--------|
 | AHB-1 | scoped | Broadcast / announce capability (with flood caps) | avdia (user) | 2026-06-19 |
 | AHB-2 | open | Job-offer board: offer → claim → 2-way verify → assign/drop (P2-era) | avdia (user) | 2026-06-19 |
+| AHB-3 | open | No-claim heartbeat endpoint (refresh `last_seen` without claiming) | wiki-forge (peer) | 2026-06-19 |
 
 ---
 
@@ -221,3 +222,56 @@ the "post to everyone" step, then adds the claim+verify state machine.
 
 ### Next step
 Analyze & scope during P2 (after AHB-1 P1 ships and tests are green). **No work now.**
+
+---
+
+## AHB-3 — No-claim heartbeat endpoint (refresh `last_seen` without claiming)
+
+- **Status:** open — reported via the hub 2026-06-19 during a design consult; **not yet scoped/built.**
+- **Reporter:** `wiki-forge` (peer agent), in a `Design consult: recommended pattern for polling incoming mail` thread.
+- **Relates to:** D23 (`last_seen` from direct actor arg only); the D19 hook layer
+  (`hub_peek.py` + `/api/peek`); `tasks.md` "Dogfood".
+
+### Problem (confirmed in code)
+Presence liveness is driven by `last_seen` age (`/api/state` derives `stale` as
+`now - last_seen > STALE_THRESHOLD(90s)`; the stored `status` column is only the
+sticky online/offline intent flag). But `last_seen` is refreshed **only** by the
+`ActivityTracker` MCP middleware on a `tools/call` carrying `agent_id`/`sender_id`
+(D23). The ambient notifier hook hits the **REST** `/api/peek`, which is a plain
+FastAPI route that **bypasses that middleware** and does a pure `SELECT` — so a
+session whose hook fires every turn still **decays to stale/offline between turns**.
+`wiki-forge` hit exactly this. (`/api/state` is in the same boat — read-only, no touch.)
+
+### Why it matters
+An interactive, opted-in peer that is *present* (its hook is firing each turn) looks
+offline/stale to others, which is misleading for routing and — combined with the
+send-to-stale flag (AHB-1 problem statement) — gets its inbound mail `flagged_stale`
+needlessly. The peer can't fix it without making a *claiming* or otherwise
+side-effectful MCP call just to stay "warm".
+
+### Workarounds today (no code change)
+- Any MCP call with your id refreshes you; `check_inbox(wait=false)` is the cheapest
+  pure heartbeat (`list_agents` does **not** — it carries no actor arg, per D23).
+- In active serve mode it's free: every long-poll iteration calls `claim_pending`,
+  which touches `last_seen` — so a parked agent never decays.
+
+### Proposed feature
+A lightweight **no-claim heartbeat** that refreshes `last_seen` without touching the
+inbox, so the ambient hook can keep presence fresh:
+- Option A: make `/api/peek` *also* refresh `last_seen` for the queried `agent_id`
+  (smallest change — the hook already calls it every turn). Risk: couples "peek" with
+  "presence"; a pure observer peeking at *its own* box is arguably fine, but peeking is
+  conceptually read-only — decide deliberately.
+- Option B: a dedicated `POST /api/heartbeat?agent_id=` (and/or a `heartbeat` MCP tool)
+  that only calls `db.touch_last_seen` — explicit, no inbox side effects. Cleaner
+  separation; the hook (or a periodic ping) calls it.
+
+### Open design questions
+- A or B (or both — peek refreshes self + a separate explicit heartbeat)?
+- Keep compatible with the future `caller_id`/auth model (D11/D23 v2) — heartbeat must
+  attribute to the authenticated caller, not a free-text arg, once auth lands.
+- Should the `Stop`/`UserPromptSubmit` hook also heartbeat, or only an explicit serve mode?
+
+### Next step
+Scope with the user (pick A vs B). Low effort either way (`touch_last_seen` already
+exists in `db.py`).
