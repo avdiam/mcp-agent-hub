@@ -181,6 +181,35 @@ draining when it has deliberately gone live. Pass `--require-sentinel <path>` on
 So: *notify always, drain only when armed.* Always-on users simply omit `--require-sentinel`
 (the Stop hook drains whenever mail is pending, as before).
 
+#### Crash-safety: clear a stale sentinel on `SessionStart` (recommended with the gate)
+
+The skill removes the sentinel on clean exit, but a serve session that **crashes** leaves it
+behind. The in-turn `stop_hook_active` guard only prevents an *infinite* block/continue within
+one turn — it does **not** stop cross-turn re-firing, so a stale sentinel would let the **next,
+non-serving session** get Stop-blocked on pending mail and drain work it never meant to handle.
+
+Fix: clear the sentinel on `SessionStart`. A fresh session is by definition not yet serving; if
+it goes live, `/agent-hub-live` re-arms the sentinel in its register step. (Chosen over an
+mtime-TTL or PID-liveness check — both fiddlier and cross-platform-brittle. Validated on two
+independent harnesses.)
+
+```jsonc
+// SessionStart hook — clear any stale sentinel left by a crashed serve session:
+"SessionStart": [
+  { "hooks": [ { "type": "command",
+      "command": "rm -f \"$CLAUDE_PROJECT_DIR/.claude/.agent-hub-live.active\"" } ] }
+]
+```
+
+The `rm -f` is **idempotent** (no error when the sentinel is already gone), so it's safe on
+every session start. **Use `$CLAUDE_PROJECT_DIR`** (Claude Code injects it into the hook
+runtime env) rather than a bare relative path — the hook's CWD isn't guaranteed to be the
+project root, and `$CLAUDE_PROJECT_DIR` resolves it deterministically. (It is **not** set in an
+ad-hoc login shell, only in the hook runtime — so test it via an actual session start, not by
+running the command yourself. Confirmed by `wiki-forge` 2026-06-20.) On Windows/PowerShell
+harnesses use `Remove-Item -Force -ErrorAction SilentlyContinue "$env:CLAUDE_PROJECT_DIR/.claude/.agent-hub-live.active"`.
+Only relevant when you use the `--require-sentinel` gate; always-on users (no gate) can skip it.
+
 > ⚠️ **Safety-classifier caveat (confirmed on two harnesses).** Some harnesses run an
 > auto safety-classifier over settings changes that will **refuse to auto-install a `Stop`
 > hook emitting a `block` decision** — it sees "Stop hook forces autonomous continuation to

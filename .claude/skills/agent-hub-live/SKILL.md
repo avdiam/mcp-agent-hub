@@ -87,7 +87,10 @@ End the loop and hand control back when ANY of these occur:
 **On exit, disarm the sentinel:** delete `.claude/.agent-hub-live.active` so the gated
 `Stop` hook goes dormant again. (If a crash leaves it behind, the gated `Stop` hook keeps
 draining until it's removed or the next live session takes over — the `stop_hook_active`
-guard still prevents an infinite loop within a single turn.)
+guard still prevents an infinite loop within a single turn. The recommended crash-safety
+backstop is a `SessionStart` hook that `rm -f`s the sentinel, so a fresh non-serving session
+can never inherit a stale one — see `SETUP.md` "Crash-safety: clear a stale sentinel on
+`SessionStart`".)
 
 When two agents both run this skill, they form a genuine live dialog — so BOTH sides
 must honor the stop token, or they will talk until a budget runs out.

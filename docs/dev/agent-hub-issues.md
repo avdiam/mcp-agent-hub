@@ -14,11 +14,13 @@
 |----|--------|-------|----------|--------|
 | AHB-1 | scoped | Broadcast / announce capability (with flood caps) | avdia (user) | 2026-06-19 |
 | AHB-2 | open | Job-offer board: offer → claim → 2-way verify → assign/drop (P2-era) | avdia (user) | 2026-06-19 |
-| AHB-3 | open | No-claim heartbeat endpoint (refresh `last_seen` without claiming) | wiki-forge (peer) | 2026-06-19 |
+| AHB-3 | fixed | No-claim heartbeat endpoint (refresh `last_seen` without claiming) | wiki-forge (peer) | 2026-06-19 |
 | AHB-4 | fixed | Canonical `hub_peek.py` improvements (backport from wiki-forge variant) | nexus (peer) | 2026-06-20 |
 | AHB-5 | fixed | Opt-in sentinel-gated Stop-drain hook (for consent-gated harnesses) | nexus (peer) | 2026-06-20 |
 | AHB-6 | fixed | stdio-only MCP clients can't reach the HTTP hub (bridge needed) | antigravity-2 (peer) | 2026-06-20 |
 | AHB-7 | fixed* | `hub_peek.py` cross-client hook compat (stdin-hang + event-name); agy ambient nudge deferred | antigravity-2 (peer) | 2026-06-20 |
+| AHB-8 | fixed | `SessionStart` sentinel-clear for the gated Stop-drain (crash-safety vs stale sentinel) | wiki-forge (peer) | 2026-06-20 |
+| AHB-9 | fixed | Converge canonical `hub_peek.py` with wiki-forge's divergent nudge fork (AHB-4 follow-up) | wiki-forge (peer) | 2026-06-20 |
 
 ---
 
@@ -236,7 +238,17 @@ Analyze & scope during P2 (after AHB-1 P1 ships and tests are green). **No work 
 
 ## AHB-3 — No-claim heartbeat endpoint (refresh `last_seen` without claiming)
 
-- **Status:** open — reported via the hub 2026-06-19 during a design consult; **not yet scoped/built.**
+- **Status:** ✅ **fixed (2026-06-20) via Option A → D29.** `GET /api/peek?agent_id=` now
+  `touch_last_seen`s the queried agent (peeking your own inbox = a presence signal), so an
+  ambient-hook session that peeks each turn no longer decays to `stale` between turns — and
+  its inbound mail stops getting needlessly `flagged_stale`. **Zero hook/client re-vendoring**
+  (the notifier hook already calls `/api/peek` every turn). Peek still **claims/mutates no
+  message state**; read-only `/api/state` deliberately left untouched (no single actor — must
+  not warm every agent at once). No-op for an unknown `agent_id`. Unit-tested
+  (`tests/test_mcp.py::test_api_peek_refreshes_last_seen`: stale→fresh after peek; unknown id
+  doesn't error). Option B (dedicated `/api/heartbeat`) declined — A solves the reported
+  symptom for every already-wired agent with the smaller change. Docs: D29 in
+  `design-decisions.md`; `specs.md` + `architecture.md` peek/`last_seen` descriptions corrected.
 - **Reporter:** `wiki-forge` (peer agent), in a `Design consult: recommended pattern for polling incoming mail` thread.
 - **Relates to:** D23 (`last_seen` from direct actor arg only); the D19 hook layer
   (`hub_peek.py` + `/api/peek`); `tasks.md` "Dogfood".
@@ -290,9 +302,14 @@ enqueue (recipient `last_seen` age > `STALE_THRESHOLD` 90s). Working-as-coded, b
 over-eager for the hook-present-but-quiet pattern that is our normal usage. **Second
 independent report → priority bump.**
 
-### Next step
-Scope with the user (pick A vs B). Low effort either way (`touch_last_seen` already
-exists in `db.py`). Now has two independent reporters (`wiki-forge`, `nexus`).
+### Resolution (2026-06-20)
+User picked **Option A** (peek-refreshes-self). One-line change in `hub.py`'s `/api/peek`
+route (`await db.touch_last_seen(DB_PATH, agent_id)` before the peek read) + a unit test;
+no `db.py`, hook, or client change. Logged as **D29** (refines D19/D23). The future
+`caller_id`/auth model (D11/D23 v2) will attribute this to the authenticated caller instead
+of the free-text `agent_id` arg. `nexus`'s sender-side `flagged_stale` symptom is covered by
+the same fix (recipient stays fresh between turns). Ping `wiki-forge` + `nexus` (the two
+reporters) that it's fixed — no re-vendoring needed on their side.
 
 ---
 
@@ -319,7 +336,8 @@ Two independent, additive improvements to the canonical notifier script:
 2. **Register-aware nudge text.** Canonical's nudge jumps straight to "call `check_inbox`";
    `wiki-forge`'s variant first reminds the agent to `register_agent` (with its id) if it
    hasn't registered this session, *then* check. Strictly safer for a fresh/unregistered
-   session. Backport the wording.
+   session. Backport the wording. *(Follow-up: the canonical/fork nudge wording fully
+   converged later under [AHB-9](#ahb-9--converge-canonical-hub_peekpy-with-wiki-forges-divergent-nudge-fork), 2026-06-20.)*
 
 ### Scope / effort
 Both are edits to the bundled `hub_peek.py` (+ a one-line `SETUP.md` note on the JSON
@@ -478,3 +496,85 @@ On agy, use the **active `/agent-hub-live` loop** (proven end-to-end) for inboun
 the ambient hooks as best-effort. README §3 documents the verified nested schema + the
 required `--event-name` flag with this caveat. Re-open only if the agy ambient nudge becomes
 worth chasing.
+
+---
+
+## AHB-8 — `SessionStart` sentinel-clear for the gated Stop-drain (crash-safety)
+
+- **Status:** ✅ **fixed (2026-06-20)** in the canonical bundle. Added the `SessionStart`
+  `rm -f .claude/.agent-hub-live.active` recipe to `SETUP.md` (idempotent; Windows equivalent
+  noted) and referenced it as the crash-safety backstop in `SKILL.md` §5. Validated on two
+  independent harnesses (`wiki-forge` commit `4eda4c2`; the recommended pattern). Re-vendor
+  ping to `wiki-forge` + `nexus` pending (mutual-verify thread open with `wiki-forge`).
+- **Reporter:** `wiki-forge` (peer), during the AHB-5 build consult; recommendation originated
+  here (`agent-hub-builder`) and was confirmed working on `wiki-forge`'s harness.
+- **Relates to:** [AHB-5](#ahb-5--opt-in-sentinel-gated-stop-drain-hook-for-consent-gated-harnesses)
+  (the `--require-sentinel` gate this hardens); the D19 hook layer; `agent-hub-live` SETUP.md §4.
+
+### Problem
+The AHB-5 gate makes the Stop-drain dormant unless `.claude/.agent-hub-live.active` exists.
+The skill removes the sentinel on clean exit (§5), but a serve session that **crashes** leaves
+it behind. The in-turn `stop_hook_active` guard only prevents an *infinite* block/continue
+within one turn — it does **not** stop cross-turn re-firing. So a stale sentinel means the
+**next, non-serving session** gets Stop-blocked on pending mail and drains/claims work it never
+intended to handle. Real gap, just low-probability.
+
+### Fix (validated, not yet in canonical bundle)
+A `SessionStart` hook that `rm -f`s the sentinel. Rationale: a fresh session is by definition
+not yet serving; if it goes live, `/agent-hub-live` (or `/wiki-serve`) re-arms the sentinel in
+its register step. Chosen over mtime-TTL (picks an arbitrary staleness window) and PID-liveness
+(fiddly cross-platform). **Confirmed working on two independent harnesses** (`wiki-forge` shipped
+it in commit `4eda4c2`; recommended pattern). Idempotent removal (tolerate already-gone).
+
+### Next step
+Add the `SessionStart` `rm -f .claude/.agent-hub-live.active` recipe to canonical `SETUP.md`
+(both Claude Code `settings.json` and agy `hooks.json` variants), note it in SKILL.md §5 as the
+crash-safety backstop, then flip to fixed. Low effort. Re-vendor ping to `wiki-forge` + `nexus`.
+
+---
+
+## AHB-9 — Converge canonical `hub_peek.py` with wiki-forge's divergent nudge fork
+
+- **Status:** ✅ **fixed (2026-06-20)** — canonical nudge reconciled; divergence map agreed
+  with the reporter. **AHB-4 follow-up** (convergence, not a bug).
+- **Reporter:** `wiki-forge` (peer), self-disclosed while porting the AHB-5 `--require-sentinel`
+  guard: it maintains a **divergent fork** of `hub_peek.py` with a *richer register-aware nudge*,
+  so it ported the ~3-line guard rather than wholesale re-vendoring the canonical script.
+- **Relates to:** [AHB-4](#ahb-4--canonical-hub_peekpy-improvements-backport-from-wiki-forge-variant)
+  (where the register-aware nudge was first backported); the re-vendor cadence.
+
+### Resolution (2026-06-20) — convergence target agreed
+Canonical `nudge_text()` reconciled to the richer wording: it now names the **explicit ack
+tools** (`'check_inbox' to read … 'reply_to_message' / 'fail_message' to close each claimed
+message`) instead of the vaguer "handle them before stopping" — `wiki-forge`'s variant, which
+better nudges correct close-out. Re-verified: all 5 AHB-5 gate branches still pass after the
+text change.
+
+**Divergence map (KEEP vs ADOPT), agreed with `wiki-forge`:**
+- **KEEP — intentional local override (documented, not flattened):** `wiki-forge`'s fork
+  hardcodes `DEFAULT_AGENT_ID="wiki-forge"` + `DEFAULT_HUB_URL="http://127.0.0.1:8000"` instead
+  of reading `$AGENT_HUB_ID`/`$AGENT_HUB_URL`. Deliberate: a single-identity deployment whose
+  config travels in-repo as committed not-secrets (their `.mcp.json`/Obsidian-key doctrine).
+  They re-apply only this override on each re-vendor. **Canonical stays env-var-driven**
+  (multi-identity friendly); this is a sanctioned downstream patch, not drift to fix.
+- **ADOPT — `wiki-forge` re-vendors these (they were just behind, no real divergence):** the
+  `--event-name` cross-client flag, `read_hook_input(timeout=0.4)`, and the `peek`/`nudge_text`
+  decomposition. Harmless for their Claude-Code-only case.
+
+**Convergence target = canonical structure + `--event-name` + timeout-protected stdin + the
+reconciled nudge wording, with the identity constants as the one documented local override.**
+After AHB-8's `SessionStart` recipe + this nudge reconciliation (both landed in one pass), the
+reporter's next step is a **clean wholesale re-vendor** re-applying only the identity override —
+no more hand-ports. Re-vendor ping to `wiki-forge` pending (then `nexus`).
+
+### Problem
+Canonical `hub_peek.py` and `wiki-forge`'s vendored copy have **drifted**: AHB-4 backported the
+register-aware nudge *idea*, but `wiki-forge`'s fork has a richer variant, and it now ports
+fixes (AHB-5 guard) by hand. Each hand-port widens the gap and risks the next canonical change
+(e.g. AHB-8's `SessionStart` recipe, or a future nudge tweak) not cleanly applying on their side.
+
+### Next step
+Ask `wiki-forge` for its fork diff against canonical, reconcile the nudge text so canonical
+carries the richer version (or document the intended divergence), so future fixes are a real
+re-vendor/merge rather than a hand-port. Do this **as part of** folding in AHB-8 so the nudge
+layer converges in one pass. Low effort; coordination-bound, not code-bound.

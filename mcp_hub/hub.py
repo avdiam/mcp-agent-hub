@@ -301,6 +301,11 @@ async def api_state():
 
 @app.get("/api/peek")
 async def api_peek(agent_id: str):
+    # AHB-3: peeking your own inbox is a presence signal — refresh last_seen so an
+    # ambient-hook session that peeks every turn doesn't decay to stale between turns.
+    # No-op for an unknown agent_id (UPDATE matches no row). Read-only /api/state stays
+    # untouched: it carries no single actor and must not warm every agent at once.
+    await db.touch_last_seen(DB_PATH, agent_id)
     peek_res = await db.peek_inbox(DB_PATH, agent_id)
     return peek_res
 

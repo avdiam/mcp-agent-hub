@@ -43,6 +43,36 @@ async def test_api_peek(test_client):
     assert "sender1" in data["senders"]
 
 @pytest.mark.asyncio
+async def test_api_peek_refreshes_last_seen(test_client):
+    # AHB-3: peeking your own inbox should refresh last_seen so a hook-present-but-quiet
+    # session doesn't decay to stale between turns.
+    import time
+    import aiosqlite
+
+    await db.upsert_agent(hub.DB_PATH, "peeker", "[]")
+
+    # Age the agent well past STALE_THRESHOLD.
+    stale_ts = time.time() - 1000
+    async with aiosqlite.connect(hub.DB_PATH) as conn:
+        await conn.execute("UPDATE agents SET last_seen=? WHERE id=?", (stale_ts, "peeker"))
+        await conn.commit()
+
+    res = await test_client.get("/api/peek?agent_id=peeker", headers={"Origin": "http://localhost"})
+    assert res.status_code == 200
+
+    # last_seen should now be fresh (within the last few seconds), not the aged value.
+    async with aiosqlite.connect(hub.DB_PATH) as conn:
+        async with conn.execute("SELECT last_seen FROM agents WHERE id=?", ("peeker",)) as cursor:
+            row = await cursor.fetchone()
+            assert row is not None
+            assert time.time() - row[0] < 5
+
+    # Peeking an unknown agent must not error (no row to update).
+    res_unknown = await test_client.get("/api/peek?agent_id=ghost", headers={"Origin": "http://localhost"})
+    assert res_unknown.status_code == 200
+    assert res_unknown.json()["count"] == 0
+
+@pytest.mark.asyncio
 async def test_origin_validation(test_client):
     # Localhost Origin allowed
     res_good = await test_client.get("/mcp", headers={"Origin": "http://localhost:8000"})

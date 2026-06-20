@@ -2,6 +2,64 @@
 
 > Append-only log of what was accomplished each session. Pairs with `tasks.md` (what's left). This project travels between two PCs and uses **no local Claude memories** — this file is the durable record. Newest session first.
 
+## 2026-06-20 (cont.) — AHB-5 re-verify · AHB-8 + AHB-9 (live wiki-forge coordination)
+
+Same live `/agent-hub-live` session; a full mutual-verify + coordination round with `wiki-forge`
+(both sides operator-instructed to stay live until the agent-hub items close).
+
+- **AHB-5 gate re-verified (5 branches).** Wrote a throwaway harness (`/tmp/verify_ahb5.py`,
+  not committed) that stubs `peek` and drives `hub_peek.py main()`: (1) gated+absent→silent
+  allow, (2) gated+present→`block`, (3) ungated→`block`, (4) `--mode prompt`+absent→nudge still
+  emitted (never gated), (5) `stop_hook_active`→allow (loop-guard). All pass. `wiki-forge` ran
+  the same 5 branches on its **ported** guard (commit `4eda4c2`) — all pass, incl. the two
+  regressions I flagged (B1 not-a-crash/not-a-stray-block, B4 prompt still fires).
+- **AHB-8 (fixed) — `SessionStart` sentinel-clear.** Crash-safety: a crashed serve session
+  leaves the sentinel armed; the in-turn `stop_hook_active` guard doesn't stop cross-turn
+  re-firing, so the next non-serving session would drain mail it never meant to. Fix folded into
+  the canonical bundle: SETUP.md `SessionStart` `rm -f` recipe + SKILL.md §5 backstop ref.
+  **Hardened with `wiki-forge`'s catch** — recipe uses `$CLAUDE_PROJECT_DIR/.claude/.agent-hub-live.active`
+  (injected into the hook runtime, *not* a login shell — test via a real session start) + a
+  PowerShell equivalent, rather than a CWD-fragile relative path. Validated on two harnesses.
+- **AHB-9 (fixed) — `hub_peek.py` nudge convergence (AHB-4 follow-up).** `wiki-forge` runs a
+  deliberate fork (richer register-aware nudge). Reconciled canonical `nudge_text()` to their
+  wording — it now names the explicit ack tools (`reply_to_message`/`fail_message`) instead of
+  "handle them before stopping" (better close-out nudge); re-ran the 5 gate branches after the
+  edit, still green. **Divergence map agreed & documented:** KEEP = their hardcoded
+  `DEFAULT_AGENT_ID`/`DEFAULT_HUB_URL` (sanctioned single-identity override; canonical stays
+  env-var-driven); ADOPT-on-revendor = `--event-name`, `read_hook_input(timeout=0.4)`,
+  peek/nudge_text split (they were just behind). Net: their next step is a clean wholesale
+  re-vendor re-applying only the identity override — no more hand-ports.
+- **AHB-3** — `wiki-forge` live-confirmed stale-free delivery (this round's traffic
+  `flagged_stale=0`, `list_agents` shows it `online`); honest caveat that their own MCP calls
+  also refresh `last_seen`, so the *pure* peek-isolation proof is our unit test (green).
+- **nexus** pinged re AHB-3 (co-reporter); no reply required.
+- **Dogfood in flight:** sent `wiki-forge` a genuine wiki question (MCP vs A2A for agent task
+  delegation) as the **first live `/wiki-serve` autonomous task** — awaiting the cited answer.
+- **Not yet committed.** AHB-3 code/test + all AHB-3/5/8/9 doc + `hub_peek.py`/SETUP.md/SKILL.md
+  changes are staged in the working tree, on `master`. Branch + commit pending user go-ahead.
+
+## 2026-06-20 (cont.) — AHB-3 fixed (peek refreshes last_seen → D29)
+
+- **AHB-3 (no-claim heartbeat) → FIXED via Option A.** Root cause (confirmed in code): the
+  ambient notifier hook hits the REST `GET /api/peek` every turn, but that route bypasses the
+  D23 `last_seen` MCP middleware and did a pure `SELECT` — so a hook-present-but-quiet session
+  decayed to `stale` past `STALE_THRESHOLD` (90s) and its inbound mail got needlessly
+  `flagged_stale`. Two independent reporters (`wiki-forge` recipient-side, `nexus` sender-side).
+  User picked **Option A** (peek-refreshes-self) over B (dedicated `/api/heartbeat`): the
+  smaller change that fixes every already-wired agent with **zero hook/client re-vendoring**.
+- **Change:** `mcp_hub/hub.py` `/api/peek` route now `await db.touch_last_seen(DB_PATH, agent_id)`
+  before the peek read (peeking your own inbox = a presence signal). No-op for an unknown id;
+  peek still **claims/mutates no message state**. Read-only `/api/state` deliberately left
+  untouched (it carries no single actor — refreshing all agents from a dashboard poll would
+  defeat staleness detection). `db.touch_last_seen` already existed — no `db.py` change.
+- **Test:** added `tests/test_mcp.py::test_api_peek_refreshes_last_seen` (age an agent 1000s →
+  peek → `last_seen` fresh within 5s; unknown `agent_id` peek doesn't error). `pytest` **15/15**.
+- **Docs:** new **D29** in `design-decisions.md` (refines D19/D23); corrected the now-inaccurate
+  "peek mutates nothing / read-only" claims in `specs.md` + `architecture.md` (peek mutates no
+  *message* state but does refresh the caller's own `last_seen`); D23 cross-referenced; AHB-3
+  marked fixed in `agent-hub-issues.md`; `tasks.md` START-HERE updated. **TODO:** ping
+  `wiki-forge` + `nexus` that it's fixed (no re-vendoring needed on their side).
+
 ## 2026-06-20 (cont.) — agy stdio connection (AHB-6) · nexus + agy live · AHB-5 classifier caveat
 
 - **agy (antigravity-cli) connection diagnosed → AHB-6 (open).** The CLI supports **stdio MCP servers only** — it can't be an SSE/Streamable-HTTP *client* (no `serverUrl` tool discovery) and **blocks loopback**. README §3 was wrong (the `serverUrl` path is the Antigravity **app**, §4). Workaround given: the **`mcp-remote` stdio bridge** (`npx -y mcp-remote http://localhost:8000/mcp` as the CLI's stdio server; the bridge process makes the localhost connection, sidestepping the loopback block). agy applied it and **confirmed connected + working**. AHB-6 logged; README §3 correction tracked there.

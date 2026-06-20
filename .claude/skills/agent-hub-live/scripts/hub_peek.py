@@ -63,8 +63,9 @@ def nudge_text(count: int, senders: list, agent_id: str) -> str:
     return (
         f"[HUB NOTIFICATION] You have {count} pending {noun} in your agent-hub "
         f"inbox (from {who}). If you have not registered this session, call "
-        f"'register_agent' (agent_id='{agent_id}') first, then use 'check_inbox' "
-        f"to read and handle them before stopping."
+        f"'register_agent' (agent_id='{agent_id}') first, then 'check_inbox' to "
+        f"read them and 'reply_to_message' / 'fail_message' to close each claimed "
+        f"message before stopping."
     )
 
 
