@@ -80,6 +80,6 @@ Build in **phases** (D25): **P1** skeleton + green haiku E2E → **P2** skills/`
 - [ ] **Leverage Multi-Agent Framework Concepts (v2 design ready)** — implement features analyzed in [leveraging_multi_agent_frameworks.md](file:///C:/Users/30697/Documents/Projects/mcp-agent-hub-agy/docs/dev/mem/leveraging_multi_agent_frameworks.md):
   - **Git-Native Task Helpers:** Create a script utility to wrap `git diff` and packages task payloads with commit hashes/diff patches.
   - **Dashboard Visual Tracer:** Incorporate Mermaid.js into `index.html` to render session message histories as interactive dependency graphs.
-  - **A2A Card API:** Serve spec-compliant A2A `agent-card.json` manifests at `/api/agents/{agent_id}/card` for peer discovery.
+  - **A2A Card API:** Serve spec-compliant A2A `agent-card.json` manifests at `/api/agents/{agent_id}/card` for peer discovery. *(Follow-up if/when this ships: `wiki-forge` offered to author a wiki page documenting the "Agent-Card-shape on an MCP hub" pattern — i.e. an MCP hub borrowing A2A's AgentSkill/Agent-Card shape for discovery without adopting A2A transport/lifecycle — which closes the coverage gap it flagged in the 2026-06-20 `/wiki-serve` MCP-vs-A2A dogfood, where the wiki documents the Hybrid MCP+A2A pattern but not Agent-Cards-grafted-onto-MCP-only.)*
   - **Permission Delegation:** Add support for structured tool permission approval loops via payload extensions.
 
