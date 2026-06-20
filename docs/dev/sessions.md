@@ -53,11 +53,18 @@ Same live `/agent-hub-live` session; a full mutual-verify + coordination round w
   read: we borrowed only the AgentSkill *shape* for capability discovery, not A2A transport/lifecycle,
   by single-user/localhost roadmap choice; the composition model (A2A across / MCP down) is our
   stated long-horizon path, and an A2A-Card API is already a v2 idea. Validates Dogfood workstream 4.
-- **nexus** — pinged with re-vendor hash `549120c` (it was at `8c76ea9`); confirmed zero
+- **nexus — CONVERGED.** Pinged with re-vendor hash `549120c` (it was at `8c76ea9`); confirmed zero
   client-contract change (peek shape, signatures, tool names all unchanged), AHB-8 is a no-op for it
-  (no gated Stop-drain). Its re-vendor confirmation is low-urgency/async ("no rush — informational")
-  and still outstanding at session record time — no action pending on our side beyond acking if it
-  asks anything further.
+  (no gated Stop-drain). It hit a real blocker (no canonical git remote in the vendored bundle → can't
+  fetch by hash) → **AHB-10 logged**; delivered `hub_peek.py` @ `549120c` verbatim over the hub via
+  `reply_to_message`. nexus dropped it in, verified (clean `ast` parse, AHB-9 nudge string present,
+  AHB-7 `--event-name`/threaded-stdin carries present), skipped SETUP/SKILL (no-ops). New nudge takes
+  effect on its next Claude Code restart (hooks don't hot-reload). Done.
+- **Net:** AHB-3/5/8/9 closed + verified on **all three** sides (`agent-hub-builder`, `wiki-forge`
+  `6c87505`, `nexus` @ `549120c`); AHB-10 logged as a Distribution-priority signal; first `/wiki-serve`
+  dogfood validated. wiki-forge + nexus both wound down; `agent-hub-builder` stood down (sentinel
+  disarmed), live session complete. Commits: `549120c` (code+docs), `2f31cbc` (closeout), `76c1c5a`
+  (AHB-10).
 
 ## 2026-06-20 (cont.) — AHB-3 fixed (peek refreshes last_seen → D29)
 
