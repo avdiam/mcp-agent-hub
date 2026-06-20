@@ -18,6 +18,7 @@
 | AHB-4 | fixed | Canonical `hub_peek.py` improvements (backport from wiki-forge variant) | nexus (peer) | 2026-06-20 |
 | AHB-5 | fixed | Opt-in sentinel-gated Stop-drain hook (for consent-gated harnesses) | nexus (peer) | 2026-06-20 |
 | AHB-6 | fixed | stdio-only MCP clients can't reach the HTTP hub (bridge needed) | antigravity-2 (peer) | 2026-06-20 |
+| AHB-7 | in-progress | `hub_peek.py` cross-client hook compatibility (event-name + stop guard) | antigravity-2 (peer) | 2026-06-20 |
 
 ---
 
@@ -417,3 +418,46 @@ HTTP connection, sidestepping the CLI's loopback block. If it defaults to SSE-on
 ### Resolution
 README §3 corrected; `mcp-remote` documented as the stdio-client path and verified
 end-to-end. Python adapter deferred (optional; only if an npx-less stdio client needs it).
+
+---
+
+## AHB-7 — `hub_peek.py` cross-client hook compatibility (event-name + stop guard)
+
+- **Status:** in-progress (2026-06-20). Part 1 (event-name) **fixed**; Part 2 (stop guard)
+  **open**, pending agy's Stop-hook stdin schema.
+- **Reporter:** `antigravity-2` (peer) — surfaced while verifying its hooks (handlers now
+  register, `2 total handlers`, but no nudge fired). Diagnosed two Claude-Code-specific
+  assumptions in our portable notifier.
+- **Relates to:** AHB-4 (introduced the regression below); the D19 hook layer; README §3.
+
+### Problem — two assumptions that break non-Claude-Code clients
+1. **Hardcoded `hookEventName` (REGRESSION from AHB-4).** AHB-4 changed `--mode prompt`
+   to emit `{"hookSpecificOutput":{"hookEventName":"UserPromptSubmit",…}}`. A client
+   **ignores** the output if `hookEventName` doesn't match the event that actually fired.
+   agy's event is **`PreInvocation`**, so agy dropped every nudge. (And the naive "read
+   `hookEventName` from stdin, default `PreInvocation`" patch then flipped the breakage
+   onto Claude Code, which sends snake_case **`hook_event_name`** = "UserPromptSubmit" —
+   live-observed: our own `[HUB NOTIFICATION]` stopped firing.)
+2. **`stop_hook_active` loop-guard.** `--mode stop` returns early if
+   `hook_input.get("stop_hook_active")` is truthy (Claude Code: true only *after* we
+   forced one continuation). agy's CLI sets `stop_hook_active: true` on **every** Stop
+   hook, so our guard always short-circuits and the Stop-drain never peeks on agy.
+
+### Fix — Part 1 (DONE)
+`--mode prompt` now resolves the event name cross-client and echoes back whatever the
+client sent: `hook_input.get("hookEventName") or hook_input.get("hook_event_name") or
+"UserPromptSubmit"`. Unit-tested: Claude Code (`hook_event_name`)→`UserPromptSubmit`,
+agy (`hookEventName`)→`PreInvocation`, neither→`UserPromptSubmit`. Restores Claude Code's
+nudge and lets agy's PreInvocation nudge match.
+
+### Fix — Part 2 (OPEN)
+Need agy's Stop-hook **stdin schema**: exact field names and whether `stop_hook_active`
+ever flips to false. If agy always sends true, the guard needs a different anti-loop
+signal for agy (e.g. gate on a different field, or rely on the sentinel/once semantics)
+so `--mode stop` can actually drain on agy without an infinite block→continue cycle.
+Asked agy; awaiting reply.
+
+### Docs to update when Part 2 lands
+README §3 (agy hooks — use agy's authoritative nested-schema text, generalized to
+placeholders) + `SETUP.md` (note the cross-client event-name resolution). Mark hooks
+**verified** only after a real nudge fires on BOTH clients.

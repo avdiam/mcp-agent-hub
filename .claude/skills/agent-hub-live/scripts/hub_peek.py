@@ -12,11 +12,14 @@ Designed to be dropped into ANY project unchanged:
 
 Two modes, because Claude Code treats hook stdout differently per event:
 
-  --mode prompt   (UserPromptSubmit)  -> emit the documented JSON contract
-                  {"hookSpecificOutput":{"hookEventName":"UserPromptSubmit",
-                  "additionalContext": <nudge>}}. Claude injects additionalContext
-                  into the turn. (Bare stdout is also injected today, but the JSON
-                  form is the explicit, forward-compatible contract.)
+  --mode prompt   (UserPromptSubmit / PreInvocation)  -> emit the documented JSON
+                  contract {"hookSpecificOutput":{"hookEventName": <event>,
+                  "additionalContext": <nudge>}}. The client injects additionalContext
+                  into the turn. CROSS-CLIENT: the emitted hookEventName MUST match the
+                  firing event or the client ignores it — so we echo back whatever the
+                  client sent on stdin (Claude Code: snake_case `hook_event_name` =
+                  "UserPromptSubmit"; agy: camelCase `hookEventName` = "PreInvocation"),
+                  defaulting to "UserPromptSubmit".
 
   --mode stop     (Stop)              -> print JSON {"decision":"block",...}.
                   A Stop hook's plain stdout is IGNORED; only a JSON block
@@ -113,10 +116,20 @@ def main() -> int:
         # JSON block decision is the ONLY thing a Stop hook honors.
         print(json.dumps({"decision": "block", "reason": message}))
     else:
-        # UserPromptSubmit: emit the documented JSON additionalContext contract.
+        # PreInvocation / UserPromptSubmit: emit the documented JSON additionalContext
+        # contract. Cross-client: the emitted hookEventName MUST match the event that
+        # fired, or the client ignores the output. Claude Code sends snake_case
+        # `hook_event_name` ("UserPromptSubmit"); agy sends camelCase `hookEventName`
+        # ("PreInvocation"). Echo back whichever the client gave us; default to
+        # Claude Code's event name when neither is present.
+        event_name = (
+            hook_input.get("hookEventName")
+            or hook_input.get("hook_event_name")
+            or "UserPromptSubmit"
+        )
         print(json.dumps({
             "hookSpecificOutput": {
-                "hookEventName": "UserPromptSubmit",
+                "hookEventName": event_name,
                 "additionalContext": message,
             }
         }))
