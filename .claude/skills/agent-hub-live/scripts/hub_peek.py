@@ -38,6 +38,7 @@ import argparse
 import json
 import os
 import sys
+import threading
 import urllib.parse
 import urllib.request
 
@@ -67,13 +68,31 @@ def nudge_text(count: int, senders: list, agent_id: str) -> str:
     )
 
 
-def read_hook_input() -> dict:
-    """Claude passes hook event JSON on stdin. Tolerate absence/garbage."""
-    try:
-        raw = sys.stdin.read()
-        return json.loads(raw) if raw.strip() else {}
-    except Exception:
-        return {}
+def read_hook_input(timeout: float = 0.4) -> dict:
+    """Read the hook event JSON the client passes on stdin, WITHOUT hanging.
+
+    Critical robustness: some clients (e.g. agy) launch the hook but never close
+    its stdin, so a plain `sys.stdin.read()` blocks until the client's hook
+    timeout kills the process — producing no nudge at all. A notifier must never
+    hang. We read in a daemon thread and give up after `timeout`s, falling back
+    to {} (callers then rely on --event-name / defaults). Claude Code closes
+    stdin, so the read returns immediately there.
+    """
+    result: dict = {}
+
+    def _read():
+        nonlocal result
+        try:
+            raw = sys.stdin.read()
+            if raw and raw.strip():
+                result = json.loads(raw)
+        except Exception:
+            pass
+
+    t = threading.Thread(target=_read, daemon=True)
+    t.start()
+    t.join(timeout)  # if stdin never EOFs, proceed anyway; the daemon dies with us
+    return result
 
 
 def main() -> int:
@@ -84,6 +103,11 @@ def main() -> int:
                         help="Hub base url (default: $AGENT_HUB_URL or http://127.0.0.1:8000).")
     parser.add_argument("--mode", choices=["prompt", "stop"], default="prompt",
                         help="prompt = JSON additionalContext (UserPromptSubmit); stop = JSON block decision (Stop).")
+    parser.add_argument("--event-name", default=None,
+                        help="Explicitly set the emitted hookEventName for --mode prompt "
+                             "(e.g. 'PreInvocation' for agy, 'UserPromptSubmit' for Claude Code). "
+                             "Use when your client doesn't pass the event name on stdin or doesn't "
+                             "close the hook's stdin. Falls back to stdin, then 'UserPromptSubmit'.")
     parser.add_argument("--require-sentinel", default=None,
                         help="Path to a sentinel file. In --mode stop, only block (drain) when "
                              "this file exists; if it is absent, allow the stop. Lets a "
@@ -123,7 +147,8 @@ def main() -> int:
         # ("PreInvocation"). Echo back whichever the client gave us; default to
         # Claude Code's event name when neither is present.
         event_name = (
-            hook_input.get("hookEventName")
+            args.event_name
+            or hook_input.get("hookEventName")
             or hook_input.get("hook_event_name")
             or "UserPromptSubmit"
         )
