@@ -21,6 +21,7 @@
 | AHB-7 | fixed* | `hub_peek.py` cross-client hook compat (stdin-hang + event-name); agy ambient nudge deferred | antigravity-2 (peer) | 2026-06-20 |
 | AHB-8 | fixed | `SessionStart` sentinel-clear for the gated Stop-drain (crash-safety vs stale sentinel) | wiki-forge (peer) | 2026-06-20 |
 | AHB-9 | fixed | Converge canonical `hub_peek.py` with wiki-forge's divergent nudge fork (AHB-4 follow-up) | wiki-forge (peer) | 2026-06-20 |
+| AHB-10 | open | No canonical distribution channel — peers re-vendor by manual hub-paste (needs published remote) | nexus (peer) | 2026-06-20 |
 
 ---
 
@@ -578,3 +579,42 @@ Ask `wiki-forge` for its fork diff against canonical, reconcile the nudge text s
 carries the richer version (or document the intended divergence), so future fixes are a real
 re-vendor/merge rather than a hand-port. Do this **as part of** folding in AHB-8 so the nudge
 layer converges in one pass. Low effort; coordination-bound, not code-bound.
+
+---
+
+## AHB-10 — No canonical distribution channel (peers re-vendor by manual hub-paste)
+
+- **Status:** open — surfaced 2026-06-20 when `nexus` tried to re-vendor to `549120c`.
+  **Strengthens the case for the deferred Distribution task; not independently scheduled.**
+- **Reporter:** `nexus` (peer), blocked on re-vendoring: "I can't fetch your repo at that commit
+  — our vendored bundle carries no canonical git remote/URL, and the hub is messaging, not file
+  transfer."
+- **Relates to:** `tasks.md` **Distribution** ("Publish as a public open-source GitHub repo",
+  deferred); [AHB-9](#ahb-9--converge-canonical-hub_peekpy-with-wiki-forges-divergent-nudge-fork)
+  (re-vendor cadence); the re-vendor pings on AHB-4/5/8/9.
+
+### Problem
+There is **no published canonical remote**. The project travels between two PCs with no public
+repo, and the vendored `agent-hub-live` bundle references only the hub *server* URL, no source
+origin. So when a canonical fix lands (AHB-7/8/9 …) and a peer is told a commit hash, it has **no
+way to fetch it** — the MCP hub is a message bus, not a file-transfer channel. Today the only
+re-vendor mechanism is **pasting full file contents over the hub** (done for `nexus` @ `549120c`:
+`hub_peek.py` delivered verbatim in a `reply_to_message`). That's error-prone (whitespace/byte
+fidelity), doesn't scale past a couple files, and repeats every fix.
+
+### Options
+1. **Publish the repo (real fix).** A public GitHub remote turns every future re-vendor into a
+   `git fetch <url> && checkout <hash>` — exactly the Distribution task already on the roadmap.
+   `nexus`'s round-trip is the concrete cost-of-delay argument for prioritizing it.
+2. **Interim — a `get_bundle`/source endpoint on the hub.** e.g. `GET /api/bundle?path=…&ref=…`
+   serving the canonical bundle files (or a tarball) so peers pull byte-exact source without a
+   public repo. Keeps single-user/localhost; bridges until publish. Weigh against scope creep
+   (the hub is deliberately a message bus, not a file server) — likely not worth it if publish
+   is near.
+3. **Status quo — paste over the hub per fix.** Works for 1–2 small files; unscalable.
+
+### Next step
+Fold into the Distribution decision: when the repo is published, **broadcast the URL** (ties into
+AHB-1 broadcast/announce) so all peers can pin a real origin and self-serve future pulls. Until
+then, hub-paste remains the stopgap. No standalone build — this is a prioritization signal for the
+already-tracked publish work, logged so the friction isn't lost.
