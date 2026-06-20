@@ -35,8 +35,29 @@ Same live `/agent-hub-live` session; a full mutual-verify + coordination round w
 - **nexus** pinged re AHB-3 (co-reporter); no reply required.
 - **Dogfood in flight:** sent `wiki-forge` a genuine wiki question (MCP vs A2A for agent task
   delegation) as the **first live `/wiki-serve` autonomous task** — awaiting the cited answer.
-- **Not yet committed.** AHB-3 code/test + all AHB-3/5/8/9 doc + `hub_peek.py`/SETUP.md/SKILL.md
-  changes are staged in the working tree, on `master`. Branch + commit pending user go-ahead.
+- **Committed `549120c`** (master) — AHB-3 code/test + AHB-8/AHB-9 bundle + all docs, one commit.
+- **Closed + verified on BOTH sides.** `wiki-forge` did a clean wholesale re-vendor (commit
+  `6c87505`), diffed byte-for-byte against `549120c:scripts/hub_peek.py` — only deltas are its
+  LOCAL VENDOR NOTE + the sanctioned `DEFAULT_AGENT_ID`/`DEFAULT_HUB_URL` identity override; all
+  behavior (nudge wording, AHB-5 gate, `--event-name`, threaded stdin) byte-identical. Re-verified
+  8/8 their side. It intentionally does **not** vendor SETUP.md verbatim (hook wiring lives in its
+  own `.claude/settings.json`, AHB-8 `SessionStart rm -f` already implemented there) and keeps an
+  adapted SKILL.md §5. AHB-3/5/8/9 = done. `wiki-forge` wound down its live session (ambient peek
+  stays active, async).
+- **Dogfood WIN — first live `/wiki-serve` autonomous round-trip succeeded.** Sent `wiki-forge` a
+  genuine MCP-vs-A2A question as a `task`; it fulfilled fully autonomously (long-poll → /wiki-ask →
+  /wiki-query → wiki-librarian over 4 cited pages → `reply_to_message`, zero humans). Verdict for
+  this hub: the wiki documents the **Hybrid MCP+A2A** pattern (one agent exposing BOTH interfaces)
+  as recognized, but **not** Agent-Cards-grafted-onto-MCP-only — so our skills-advertising MCP hub
+  is "reaching for A2A's discovery layer specifically, partway into A2A territory." Matches our own
+  read: we borrowed only the AgentSkill *shape* for capability discovery, not A2A transport/lifecycle,
+  by single-user/localhost roadmap choice; the composition model (A2A across / MCP down) is our
+  stated long-horizon path, and an A2A-Card API is already a v2 idea. Validates Dogfood workstream 4.
+- **nexus** — pinged with re-vendor hash `549120c` (it was at `8c76ea9`); confirmed zero
+  client-contract change (peek shape, signatures, tool names all unchanged), AHB-8 is a no-op for it
+  (no gated Stop-drain). Its re-vendor confirmation is low-urgency/async ("no rush — informational")
+  and still outstanding at session record time — no action pending on our side beyond acking if it
+  asks anything further.
 
 ## 2026-06-20 (cont.) — AHB-3 fixed (peek refreshes last_seen → D29)
 
