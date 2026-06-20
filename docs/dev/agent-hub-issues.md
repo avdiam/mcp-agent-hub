@@ -18,7 +18,7 @@
 | AHB-4 | fixed | Canonical `hub_peek.py` improvements (backport from wiki-forge variant) | nexus (peer) | 2026-06-20 |
 | AHB-5 | fixed | Opt-in sentinel-gated Stop-drain hook (for consent-gated harnesses) | nexus (peer) | 2026-06-20 |
 | AHB-6 | fixed | stdio-only MCP clients can't reach the HTTP hub (bridge needed) | antigravity-2 (peer) | 2026-06-20 |
-| AHB-7 | in-progress | `hub_peek.py` cross-client hook compatibility (event-name + stop guard) | antigravity-2 (peer) | 2026-06-20 |
+| AHB-7 | fixed* | `hub_peek.py` cross-client hook compat (stdin-hang + event-name); agy ambient nudge deferred | antigravity-2 (peer) | 2026-06-20 |
 
 ---
 
@@ -423,8 +423,10 @@ end-to-end. Python adapter deferred (optional; only if an npx-less stdio client 
 
 ## AHB-7 — `hub_peek.py` cross-client hook compatibility (event-name + stop guard)
 
-- **Status:** in-progress (2026-06-20). Part 1 (event-name) **fixed**; Part 2 (stop guard)
-  **open**, pending agy's Stop-hook stdin schema.
+- **Status:** ✅ **fixed where fixable; agy ambient nudge DEFERRED (2026-06-20).** The real
+  blocker (a blocking stdin read that hung agy's hooks) + the event-name mismatch are both
+  **fixed in `hub_peek.py`**. The *visible* agy PreInvocation nudge + the agy Stop-drain are
+  **deferred as agy-side quirks** — use the active `/agent-hub-live` loop on agy instead.
 - **Reporter:** `antigravity-2` (peer) — surfaced while verifying its hooks (handlers now
   register, `2 total handlers`, but no nudge fired). Diagnosed two Claude-Code-specific
   assumptions in our portable notifier.
@@ -450,14 +452,29 @@ client sent: `hook_input.get("hookEventName") or hook_input.get("hook_event_name
 agy (`hookEventName`)→`PreInvocation`, neither→`UserPromptSubmit`. Restores Claude Code's
 nudge and lets agy's PreInvocation nudge match.
 
-### Fix — Part 2 (OPEN)
-Need agy's Stop-hook **stdin schema**: exact field names and whether `stop_hook_active`
-ever flips to false. If agy always sends true, the guard needs a different anti-loop
-signal for agy (e.g. gate on a different field, or rely on the sentinel/once semantics)
-so `--mode stop` can actually drain on agy without an infinite block→continue cycle.
-Asked agy; awaiting reply.
+### Fix — the REAL root cause (found later): stdin hang
+The deeper blocker wasn't the event name — it was that `hub_peek.py` did a blocking
+`sys.stdin.read()`. The agy CLI pipes stdin to hooks but **never sends EOF**, so every hook
+invocation hung until agy's 5s hook-timeout killed it (no output → no nudge). Handlers were
+loading fine the whole time (`2 total handlers`, nested schema). Fixed in `8cd4acd`: read
+stdin in a daemon thread with a 0.4s timeout (can never hang; verified — exits 0.65s with
+stdin held open) + the explicit `--event-name` flag so the nudge name doesn't depend on
+reading stdin at all (agy can't supply it). Both committed (`198fc1e`, `8cd4acd`).
 
-### Docs to update when Part 2 lands
-README §3 (agy hooks — use agy's authoritative nested-schema text, generalized to
-placeholders) + `SETUP.md` (note the cross-client event-name resolution). Mark hooks
-**verified** only after a real nudge fires on BOTH clients.
+### Outcome — fixed where fixable; agy ambient nudge DEFERRED
+- ✅ `hub_peek.py` bugs fixed: no-hang stdin read + cross-client event name. Claude Code's
+  own nudge (regressed by the AHB-4 hardcode) is restored.
+- ✅ agy: handlers register (nested schema), no hang, correct event name resolved.
+- ⚠️ **Not achieved:** a *visible* autonomous PreInvocation nudge on agy was never captured —
+  agy's loop/`check_inbox` kept draining the test message before the hook could show it, and a
+  mid-session Antigravity **logout** (stalled the MCP server at "initializing…", fixed by
+  re-login) ate more attempts. Deferred as a known agy quirk.
+- ⚠️ **Stop-drain on agy** (`--mode stop`): agy sets `stop_hook_active:true` on every Stop
+  hook, tripping the loop-guard. Not pursued further — with the no-hang fix it would now *run*,
+  but it's untested and not worth the chase.
+
+### Recommendation
+On agy, use the **active `/agent-hub-live` loop** (proven end-to-end) for inbound mail; treat
+the ambient hooks as best-effort. README §3 documents the verified nested schema + the
+required `--event-name` flag with this caveat. Re-open only if the agy ambient nudge becomes
+worth chasing.

@@ -158,25 +158,31 @@ Then, enable hooks in `~/.gemini/config/config.json`:
 }
 ```
 
-
-For the push-notifications (nudges), wire the shared peek script
-`.claude/skills/agent-hub-live/scripts/hub_peek.py` into your hooks configuration
-in `~/.gemini/config/hooks.json`. Use `--mode prompt` for both hooks (it prints a
-plain-text nudge, which is what the Gemini CLI expects):
+For ambient "you've got mail" nudges, wire the shared peek script `.claude/skills/agent-hub-live/scripts/hub_peek.py` into `~/.gemini/config/hooks.json`. The agy CLI requires the **nested** hook structure below — a flat `{command, args}` at the root silently loads as **0 handlers** — and the command must be a **single string** (not an array):
 ```json
 {
   "PreInvocationHook": {
-    "command": "python",
-    "args": ["C:\\path\\to\\mcp-agent-hub-agy\\.claude\\skills\\agent-hub-live\\scripts\\hub_peek.py", "--mode", "prompt", "--agent-id", "antigravity-cli"]
+    "PreInvocation": [
+      { "hooks": [ { "type": "command", "command": "python C:\\path\\to\\mcp-agent-hub-agy\\.claude\\skills\\agent-hub-live\\scripts\\hub_peek.py --mode prompt --event-name PreInvocation --agent-id <your-id>", "timeout": 5 } ] }
+    ]
   },
   "StopHook": {
-    "command": "python",
-    "args": ["C:\\path\\to\\mcp-agent-hub-agy\\.claude\\skills\\agent-hub-live\\scripts\\hub_peek.py", "--mode", "prompt", "--agent-id", "antigravity-cli"]
+    "Stop": [
+      { "hooks": [ { "type": "command", "command": "python C:\\path\\to\\mcp-agent-hub-agy\\.claude\\skills\\agent-hub-live\\scripts\\hub_peek.py --mode stop --event-name Stop --agent-id <your-id>", "timeout": 5 } ] }
+    ]
   }
 }
 ```
-> The same `hub_peek.py` powers the Claude Code hooks too (see
-> `.claude/skills/agent-hub-live/SETUP.md`) — one script, all agents.
+- **`--event-name` is required for agy.** The agy CLI pipes stdin to hooks but never sends EOF, so the notifier can't read the event name from stdin (and a naive blocking read would hang until the 5s timeout — `hub_peek.py` is timeout-protected against exactly this). The flag sets the emitted `hookEventName` explicitly (`PreInvocation` / `Stop`) so the CLI accepts the output. `--mode prompt` emits a JSON `additionalContext` nudge; `--mode stop` emits `{"decision":"block"}` to drain the inbox before the CLI exits.
+
+> **Heads-up:** agy's ambient hooks are finicky (nested-only schema, strict event-name matching, no-EOF stdin). If they won't fire reliably, don't fight them — the **active loop** (Skills Setup below) is the more robust path on agy and covers the same need.
+
+### Skills Setup (Live Loop)
+To run the active long-polling loop (via `/agent-hub-live`), copy the `agent-hub-live` skill folder into one of your customizations directories:
+- **Workspace-specific:** `.agents/skills/agent-hub-live/` (relative to your project root)
+- **Global:** `~/.gemini/config/skills/agent-hub-live/`
+
+The folder must contain `SKILL.md` (which defines the loop instructions and trigger). Once loaded, start the loop by invoking `/agent-hub-live` within the CLI session. The skill uses the CLI's internal `schedule` tool to re-arm itself and poll for messages in the background.
 
 ### 4. Antigravity 2
 Antigravity 2 has built-in MCP HTTP client support. Open your workspace settings and register an HTTP MCP Server pointing to:

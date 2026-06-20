@@ -91,24 +91,7 @@ pytest tests/test_mcp.py -k test_api_peek
 
 ## D19 hook layer (peek-nudge), per-client config
 
-Both clients run the shared `hub_peek.py` (`.claude/skills/agent-hub-live/scripts/hub_peek.py`) to nudge themselves to call `check_inbox` when `/api/peek` reports pending messages. The script takes `--agent-id` (or `$AGENT_HUB_ID`) and a `--mode`: `prompt` prints a plain-text nudge (injected on `UserPromptSubmit`), `stop` emits a `{"decision":"block"}` JSON so a Claude `Stop` hook actually keeps the agent going (plain stdout is ignored on Stop). Claude Code wires it via **project** `.claude/settings.json` (`UserPromptSubmit` → `--mode prompt`, `Stop` → `--mode stop`); full guide in `.claude/skills/agent-hub-live/SETUP.md`. Antigravity wires it via `~/.gemini/config/` (use `--mode prompt` for both hooks):
-
-```json
-// 1. ~/.gemini/config/config.json — enable json hooks:
-{ "jsonHooksEnabled": true }
-
-// 2. ~/.gemini/config/hooks.json — define the hooks:
-{
-  "PreInvocationHook": {
-    "command": "python",
-    "args": ["C:\\path\\to\\mcp-agent-hub-agy\\.claude\\skills\\agent-hub-live\\scripts\\hub_peek.py", "--mode", "prompt", "--agent-id", "antigravity-cli"]
-  },
-  "StopHook": {
-    "command": "python",
-    "args": ["C:\\path\\to\\mcp-agent-hub-agy\\.claude\\skills\\agent-hub-live\\scripts\\hub_peek.py", "--mode", "prompt", "--agent-id", "antigravity-cli"]
-  }
-}
-```
+Both clients run the shared `hub_peek.py` (`.claude/skills/agent-hub-live/scripts/hub_peek.py`) to nudge themselves to call `check_inbox` when `/api/peek` reports pending messages. The script takes `--agent-id` (or `$AGENT_HUB_ID`) and a `--mode`: `prompt` prints a plain-text nudge (injected on `UserPromptSubmit`), `stop` emits a `{"decision":"block"}` JSON so a Claude `Stop` hook actually keeps the agent going (plain stdout is ignored on Stop). Claude Code wires it via **project** `.claude/settings.json` (`UserPromptSubmit` → `--mode prompt`, `Stop` → `--mode stop`); full guide in `.claude/skills/agent-hub-live/SETUP.md`. **Antigravity (agy CLI)** wires it via `~/.gemini/config/config.json` (`{"jsonHooksEnabled": true}`) + `~/.gemini/config/hooks.json`, with agy-specific requirements: the **nested** hook schema (a flat `{command,args}` silently loads **0 handlers**), a **single-string** command, and the **`--event-name`** flag — `PreInvocation` → `--mode prompt`, `Stop` → `--mode stop`. agy never EOFs the hook's stdin, so the notifier can't read the event name from it (and `hub_peek.py`'s stdin read is timeout-protected so the no-EOF stdin can't hang it). **Full verified config + caveats in README §3.** agy's ambient hooks are finicky (see AHB-7 in `agent-hub-issues.md`) — the active `/agent-hub-live` loop is the robust path on agy.
 
 ## Conventions
 
