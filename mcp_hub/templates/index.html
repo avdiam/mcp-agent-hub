@@ -260,9 +260,23 @@
                     </div>
                     <div class="flex items-center gap-1.5">
                         <span class="text-xs text-slate-500 uppercase tracking-wider font-semibold">Stream:</span>
-                        <select id="filter-session" onchange="onFilterChange()"
+                        <select id="filter-session" onchange="onFilterChange()" title="Filter by conversation stream"
+                            class="bg-dark-700 text-slate-300 text-xs rounded-md border border-white/10 px-2 py-0.5 focus:outline-none focus:border-primary-500/50 font-mono max-w-[140px] truncate">
+                            <option value="">(all)</option>
+                        </select>
+                    </div>
+                    <div class="flex items-center gap-1.5">
+                        <span class="text-xs text-slate-500 uppercase tracking-wider font-semibold">Status:</span>
+                        <select id="filter-status" onchange="onFilterChange()" title="active = pending + in progress + needs input"
                             class="bg-dark-700 text-slate-300 text-xs rounded-md border border-white/10 px-2 py-0.5 focus:outline-none focus:border-primary-500/50 font-mono">
                             <option value="">(all)</option>
+                            <option value="__active__">active</option>
+                            <option value="pending">pending</option>
+                            <option value="in_progress">in progress</option>
+                            <option value="input_required">needs input</option>
+                            <option value="completed">completed</option>
+                            <option value="failed">failed</option>
+                            <option value="expired">expired</option>
                         </select>
                     </div>
                     <button id="filter-clear" onclick="clearFilters()" class="hidden text-xs text-slate-400 hover:text-white underline decoration-dotted ml-1">clear</button>
@@ -483,10 +497,12 @@
         let messagesDict = {};
         let eventsCache = [];
         let lastAgents = [];
+        let lastStats = null;
         let cachedMessages = [];
         let filterAgent1 = '';
         let filterAgent2 = '';
         let filterSession = '';
+        let filterStatus = '';
         const collapsedSessions = new Set(); // session_ids collapsed in the queue
         let modalOpen = false;               // pause re-render while a modal is open
 
@@ -497,6 +513,7 @@
                 const res = await fetch('/api/state');
                 const data = await res.json();
                 lastAgents = data.agents || [];
+                lastStats = data.stats;
                 cachedMessages = data.messages || [];
                 renderStats(data.agents, cachedMessages, data.stats);
                 renderAgents(data.agents);
@@ -517,18 +534,22 @@
             const online = (agents || []).filter(a => a.status === 'online').length;
             const tiles = [
                 { label: 'Agents Online', value: online, cls: 'text-emerald-400' },
-                { label: 'Pending', value: counts.pending, cls: 'text-blue-400' },
-                { label: 'In Progress', value: counts.in_progress, cls: 'text-amber-400' },
-                { label: 'Needs Input', value: counts.input_required, cls: 'text-purple-400' },
-                { label: 'Failed', value: counts.failed, cls: 'text-red-400' },
+                { label: 'Pending', value: counts.pending, cls: 'text-blue-400', status: 'pending' },
+                { label: 'In Progress', value: counts.in_progress, cls: 'text-amber-400', status: 'in_progress' },
+                { label: 'Needs Input', value: counts.input_required, cls: 'text-purple-400', status: 'input_required' },
+                { label: 'Failed', value: counts.failed, cls: 'text-red-400', status: 'failed' },
                 { label: 'Total Msgs', value: (stats && stats.total_messages) || 0, cls: 'text-slate-200' },
             ];
-            document.getElementById('stat-tiles').innerHTML = tiles.map(t => `
-                <div class="glass-panel rounded-xl px-4 py-3 border border-white/5">
+            document.getElementById('stat-tiles').innerHTML = tiles.map(t => {
+                const clickable = !!t.status;
+                const active = clickable && filterStatus === t.status;
+                return `
+                <div class="glass-panel rounded-xl px-4 py-3 border ${active ? 'border-primary-500/60 ring-1 ring-primary-500/40' : 'border-white/5'} ${clickable ? 'cursor-pointer hover:border-white/20 transition-colors' : ''}"
+                     ${clickable ? `onclick="setStatusFilter('${t.status}')" title="Filter the queue to ${t.label} (click again to clear)"` : ''}>
                     <div class="text-[11px] uppercase tracking-wider text-slate-500 font-semibold">${t.label}</div>
                     <div class="text-2xl font-semibold ${t.cls} mt-0.5 font-mono">${t.value}</div>
-                </div>
-            `).join('');
+                </div>`;
+            }).join('');
         }
 
         // ---------- Agents ----------
@@ -695,8 +716,9 @@
             filterAgent1 = agent1Select.value;
             filterAgent2 = agent2Select.value;
             filterSession = sessionSelect.value;
+            filterStatus = document.getElementById('filter-status').value;
 
-            const isFiltering = filterAgent1 || filterAgent2 || filterSession;
+            const isFiltering = filterAgent1 || filterAgent2 || filterSession || filterStatus;
             document.getElementById('filter-clear').classList.toggle('hidden', !isFiltering);
         }
 
@@ -704,17 +726,25 @@
             filterAgent1 = document.getElementById('filter-agent-1').value;
             filterAgent2 = document.getElementById('filter-agent-2').value;
             filterSession = document.getElementById('filter-session').value;
-            
-            const isFiltering = filterAgent1 || filterAgent2 || filterSession;
+            filterStatus = document.getElementById('filter-status').value;
+
+            const isFiltering = filterAgent1 || filterAgent2 || filterSession || filterStatus;
             document.getElementById('filter-clear').classList.toggle('hidden', !isFiltering);
-            
-            if (cachedMessages.length > 0) {
-                renderMessages(cachedMessages);
-            }
+
+            // Re-render stats too so the active-tile ring tracks the status filter immediately.
+            renderStats(lastAgents, cachedMessages, lastStats);
+            renderMessages(cachedMessages);
         }
 
         function setStreamFilter(sid) {
             document.getElementById('filter-session').value = sid;
+            onFilterChange();
+        }
+
+        // Toggle: clicking the active status tile clears it; otherwise sets it.
+        function setStatusFilter(s) {
+            const sel = document.getElementById('filter-status');
+            sel.value = (filterStatus === s) ? '' : s;
             onFilterChange();
         }
 
@@ -728,6 +758,7 @@
             document.getElementById('filter-agent-1').value = '';
             document.getElementById('filter-agent-2').value = '';
             document.getElementById('filter-session').value = '';
+            document.getElementById('filter-status').value = '';
             onFilterChange();
         }
 
@@ -737,8 +768,17 @@
                 if (filterSession === '(none)' && m.session_id) return false;
                 if (filterSession !== '(none)' && m.session_id !== filterSession) return false;
             }
-            
-            // 2. Agents Filter
+
+            // 2. Status Filter (ANDs with the agent/stream filters)
+            if (filterStatus) {
+                if (filterStatus === '__active__') {
+                    if (!['pending', 'in_progress', 'input_required'].includes(m.status)) return false;
+                } else if (m.status !== filterStatus) {
+                    return false;
+                }
+            }
+
+            // 3. Agents Filter
             if (filterAgent1 && filterAgent2) {
                 // Communications strictly between Agent 1 and Agent 2
                 return (m.sender_id === filterAgent1 && m.recipient_id === filterAgent2) ||
