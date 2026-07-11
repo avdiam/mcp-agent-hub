@@ -17,14 +17,15 @@ from pydantic import BaseModel, Field
 from pathlib import Path
 
 from . import db
+# Tunables live in db.py (the single source of truth) so tuning them can't silently desync
+# the DB logic from the server config — re-exported here for existing `hub.STALE_THRESHOLD`
+# style references (AHB-14).
+from .db import STALE_THRESHOLD, VISIBILITY_TIMEOUT, MESSAGE_TTL
 
 # Global configurations
 DB_PATH = "hub.db"
 START_TIME = time.time()
 DASHBOARD_MESSAGE_LIMIT = 100
-STALE_THRESHOLD = 90
-VISIBILITY_TIMEOUT = 600
-MESSAGE_TTL = 86400
 LONGPOLL_INTERVAL = 1.0
 
 # Activity Ring Buffer (D22)
@@ -52,6 +53,9 @@ async def hub_lifespan(app: FastAPI):
 from urllib.parse import urlparse
 
 # Origin Validation Middleware (D18)
+# Watch-item (AHB-14): this is a Starlette BaseHTTPMiddleware, which in some versions buffers
+# streaming responses; the MCP transport is streamable-HTTP. No issue observed in practice —
+# if streaming ever hiccups under load, rewrite this as pure ASGI middleware.
 class OriginValidationMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
         if request.url.path.startswith("/mcp") or request.url.path.startswith("/api/"):
@@ -101,14 +105,25 @@ class ActivityTracker:
         tool_name = getattr(msg, "name", "unknown") if (method == "tools/call" and msg) else "unknown"
         args = getattr(msg, "arguments", {}) or {}
         caller = args.get("agent_id") or args.get("sender_id")
-        
+
         message_id = args.get("message_id")
         arg_summary = str(args)[:100] + "..." if len(str(args)) > 100 else str(args)
 
         if caller:
             # Refresh last_seen (D23)
             await db.touch_last_seen(DB_PATH, caller)
-            
+
+        # Activity-feed display attribution only — NOT last_seen (D23 deliberately excludes
+        # these). reply/fail/request_input/check_status carry only a message_id, so resolve who
+        # acted from the message row instead of logging them as "System" (AHB-14): check_status
+        # is the sender polling its own message; the ack tools are the recipient acting on a
+        # message it claimed from its inbox.
+        display_agent = caller
+        if not display_agent and message_id:
+            endpoints = await db.get_message_endpoints(DB_PATH, message_id)
+            if endpoints:
+                display_agent = endpoints["sender_id"] if tool_name == "check_status" else endpoints["recipient_id"]
+
         try:
             result = await call_next(context)
             outcome = "success"
@@ -119,7 +134,7 @@ class ActivityTracker:
             error_str = str(e) + "\n" + traceback.format_exc()
             activity_buffer.append({
                 "timestamp": time.time(),
-                "agent": caller,
+                "agent": display_agent,
                 "tool": tool_name,
                 "outcome": outcome,
                 "message_id": message_id,
@@ -127,10 +142,10 @@ class ActivityTracker:
                 "error": error_str
             })
             raise e
-            
+
         activity_buffer.append({
             "timestamp": time.time(),
-            "agent": caller,
+            "agent": display_agent,
             "tool": tool_name,
             "outcome": outcome,
             "message_id": message_id,

@@ -18,6 +18,13 @@ if sqlite3.sqlite_version_info < (3, 35):
 # AHB-1's announcement kind will join this set when broadcast lands.
 NO_ACK_KINDS = ("result", "failure")
 
+# Tunable queue constants — the single source of truth. hub.py imports these (rather than
+# redefining them) so tuning one here can't silently desync the DB logic from the server
+# config; each is also overridable per-call via the matching keyword arg. (Q5; AHB-14)
+STALE_THRESHOLD = 90       # seconds since last_seen before a queued recipient is flagged stale
+VISIBILITY_TIMEOUT = 600   # seconds an in_progress claim is held before it's eligible for redelivery
+MESSAGE_TTL = 86400        # seconds a pending task lingers before the sweep marks it expired
+
 
 
 def retry_on_lock(retries=5, backoff=0.01):
@@ -150,7 +157,7 @@ async def touch_last_seen(db_path, agent_id):
         await db.commit()
 
 @retry_on_lock()
-async def enqueue_message(db_path, sender_id, recipient_id, payload, context=None, session_id=None, parent_id=None, kind="task", response=None, subject=None, internal=False):
+async def enqueue_message(db_path, sender_id, recipient_id, payload, context=None, session_id=None, parent_id=None, kind="task", response=None, subject=None, internal=False, stale_threshold=STALE_THRESHOLD):
     message_id = str(uuid.uuid4())
     if not session_id:
         session_id = str(uuid.uuid4())
@@ -170,7 +177,7 @@ async def enqueue_message(db_path, sender_id, recipient_id, payload, context=Non
                 if row["status"] == "offline" and not internal:
                     raise ValueError(f"Recipient {recipient_id} is offline")
                 is_stale = 0
-                if time.time() - row["last_seen"] > 90:
+                if time.time() - row["last_seen"] > stale_threshold:
                     is_stale = 1
 
         now = time.time()
@@ -185,7 +192,7 @@ async def enqueue_message(db_path, sender_id, recipient_id, payload, context=Non
     return {"message_id": message_id, "session_id": session_id}
 
 @retry_on_lock()
-async def claim_pending(db_path, agent_id, visibility_timeout=600):
+async def claim_pending(db_path, agent_id, visibility_timeout=VISIBILITY_TIMEOUT):
     async with _connect(db_path) as db:
         now = time.time()
         cutoff = now - visibility_timeout
@@ -212,7 +219,7 @@ async def claim_pending(db_path, agent_id, visibility_timeout=600):
         return claimed
 
 @retry_on_lock()
-async def reclaim_stale(db_path, visibility_timeout=600):
+async def reclaim_stale(db_path, visibility_timeout=VISIBILITY_TIMEOUT):
     async with _connect(db_path) as db:
         now = time.time()
         cutoff = now - visibility_timeout
@@ -342,6 +349,19 @@ async def fail_message(db_path, message_id, error):
         )
 
 @retry_on_lock()
+async def get_message_endpoints(db_path, message_id):
+    """Return {'sender_id', 'recipient_id'} for a message, or None if it doesn't exist.
+
+    Used by the activity-feed middleware to attribute the message-id-only tools
+    (reply/fail/request_input/check_status) to a real agent for display, since those
+    calls carry no agent_id/sender_id arg (AHB-14). Does NOT touch last_seen (D23).
+    """
+    async with _connect(db_path) as db:
+        async with db.execute("SELECT sender_id, recipient_id FROM messages WHERE id=?", (message_id,)) as cursor:
+            row = await cursor.fetchone()
+            return dict(row) if row else None
+
+@retry_on_lock()
 async def get_status(db_path, message_id):
     async with _connect(db_path) as db:
         async with db.execute("SELECT * FROM messages WHERE id=?", (message_id,)) as cursor:
@@ -351,10 +371,10 @@ async def get_status(db_path, message_id):
             return dict(row)
 
 @retry_on_lock()
-async def peek_inbox(db_path, agent_id):
+async def peek_inbox(db_path, agent_id, visibility_timeout=VISIBILITY_TIMEOUT):
     async with _connect(db_path) as db:
         now = time.time()
-        cutoff = now - 600 # default visibility_timeout
+        cutoff = now - visibility_timeout
         
         query = """
             SELECT sender_id FROM messages 
@@ -369,7 +389,7 @@ async def peek_inbox(db_path, agent_id):
             return {"count": len(rows), "senders": senders}
 
 @retry_on_lock()
-async def expire_messages(db_path, message_ttl=86400):
+async def expire_messages(db_path, message_ttl=MESSAGE_TTL):
     async with _connect(db_path) as db:
         now = time.time()
         cutoff = now - message_ttl

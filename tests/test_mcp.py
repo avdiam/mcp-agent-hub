@@ -164,6 +164,15 @@ async def test_api_reset(test_client):
     assert status["claimed_at"] is None
 
 @pytest.mark.asyncio
+async def test_tunables_are_single_source():
+    # AHB-14: hub re-exports db's tunables (same object) rather than redefining them, so
+    # tuning a constant can't silently desync the DB logic from the server config. `is`
+    # catches a re-introduced duplicate literal (these values aren't interned).
+    assert hub.STALE_THRESHOLD is db.STALE_THRESHOLD
+    assert hub.VISIBILITY_TIMEOUT is db.VISIBILITY_TIMEOUT
+    assert hub.MESSAGE_TTL is db.MESSAGE_TTL
+
+@pytest.mark.asyncio
 async def test_api_recovery_middleware(test_client):
     # Cross-site POST to /api/reset -> 403
     res_reset = await test_client.post("/api/reset", headers={"Sec-Fetch-Site": "cross-site"})

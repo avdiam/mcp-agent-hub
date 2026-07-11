@@ -392,3 +392,35 @@ async def test_fail_input_request_unpark_is_idempotent(temp_db):
     # Duplicate fail of the SAME clarification must NOT reopen the completed parent.
     await db.fail_message(temp_db, rid, "still can't")
     assert (await db.get_status(temp_db, tid))["status"] == "completed"
+
+@pytest.mark.asyncio
+async def test_enqueue_respects_stale_threshold(temp_db):
+    # AHB-14: the stale cutoff is a parameter sourced from the single STALE_THRESHOLD
+    # constant, not a hardcoded 90 — so tuning it actually changes the flag.
+    await db.upsert_agent(temp_db, "recipient", "[]")
+    async with aiosqlite.connect(temp_db) as conn:
+        await conn.execute("UPDATE agents SET last_seen=?", (time.time() - 120,))
+        await conn.commit()
+
+    m1 = await db.enqueue_message(temp_db, "s", "recipient", "p1")                       # 120s old vs default 90 -> stale
+    m2 = await db.enqueue_message(temp_db, "s", "recipient", "p2", stale_threshold=300)  # 120s old vs 300 -> not stale
+
+    async with aiosqlite.connect(temp_db) as conn:
+        async with conn.execute(
+            "SELECT id, flagged_stale FROM messages WHERE id IN (?, ?)",
+            (m1["message_id"], m2["message_id"]),
+        ) as cursor:
+            flags = {r[0]: r[1] for r in await cursor.fetchall()}
+    assert flags[m1["message_id"]] == 1
+    assert flags[m2["message_id"]] == 0
+
+@pytest.mark.asyncio
+async def test_get_message_endpoints(temp_db):
+    # AHB-14: activity-feed display attribution resolves the acting agent from the message row.
+    await db.upsert_agent(temp_db, "worker", "[]")
+    msg = await db.enqueue_message(temp_db, "requester", "worker", "do work")
+    assert await db.get_message_endpoints(temp_db, msg["message_id"]) == {
+        "sender_id": "requester",
+        "recipient_id": "worker",
+    }
+    assert await db.get_message_endpoints(temp_db, "does-not-exist") is None

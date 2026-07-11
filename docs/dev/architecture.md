@@ -64,7 +64,7 @@ app.mount("/mcp", mcp_app)                    # dashboard routes + /api/state li
 ### 1a. Cross-cutting Middleware
 A single FastMCP middleware (`on_call_tool` hook) centralizes concerns that would otherwise be copy-pasted into all 9 tools (see `design-decisions.md`, D14):
 * **`last_seen` refresh** — read the **direct actor arg where present** — `agent_id` (`register`/`check_inbox`/`disconnect`) or `sender_id` (`send_message`) — and `touch_last_seen`; the `message_id`-only tools (`reply`/`fail`/`request_input`/`check_status`) and `list_agents` are **not** refreshed (they're called moments after a fresh claim, or carry no caller identity) — `design-decisions.md`, D23. The non-MCP `GET /api/peek` route (which bypasses this middleware) **also** `touch_last_seen`s the queried agent — AHB-3/D29. v1 has no auth.
-* **Structured per-call logging** — append one event to an **in-memory ring buffer** (last ~200: tool name, args summary, timestamp, outcome, agent-if-known) that the dashboard's Activity panel reads via `/api/state` (D22); also emit it to stdout as a structured log.
+* **Structured per-call logging** — append one event to an **in-memory ring buffer** (last ~200: tool name, args summary, timestamp, outcome, acting agent) that the dashboard's Activity panel reads via `/api/state` (D22); also emit it to stdout as a structured log. The message-id-only tools carry no actor arg, so their agent is resolved from the message row for **display only** (not `last_seen` — D23 stands), rather than logged as "System" (AHB-14).
 
 This keeps the tool bodies focused on their own DB mutation. `mcp.add_middleware(...)` runs first-added first on the way in.
 

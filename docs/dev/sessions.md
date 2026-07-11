@@ -2,6 +2,37 @@
 
 > Append-only log of what was accomplished each session. Pairs with `tasks.md` (what's left). This project travels between two PCs and uses **no local Claude memories** — this file is the durable record. Newest session first.
 
+## 2026-07-11 (later 2) — AHB-14 fixed (D32): tunables single-sourced + activity-feed attribution
+
+Directed follow-up: **the AHB-14 hardening pass.** Two substantive items fixed, one watch-item
+documented and left as-is. `pytest` **26/26** (23 → +3).
+
+- **#1 — duplicated magic constants → single source in `db.py`.** `db.py` hardcoded `90` (stale
+  cutoff in `enqueue_message`) and `600` (visibility cutoff in `peek_inbox`), and duplicated `600`/
+  `86400` as function defaults — all across a boundary `db.py` can't import back from `hub.py`
+  (circular), so tuning a `hub.py` constant silently left the DB logic on the old value. Moved the
+  three DB tunables (`STALE_THRESHOLD`/`VISIBILITY_TIMEOUT`/`MESSAGE_TTL`) to **`db.py`** (the lower
+  layer) as the single definition; `hub.py` now `from .db import` them. `enqueue_message` gained a
+  `stale_threshold=` kwarg and `peek_inbox` a `visibility_timeout=` kwarg, both defaulting to the
+  constant (matching the existing `claim_pending`/`reclaim_stale`/`expire_messages` pattern). Guarded
+  by `test_tunables_are_single_source` (`hub.X is db.X`) + `test_enqueue_respects_stale_threshold`.
+- **#2 — activity feed no longer logs the message-id-only tools as "System".** The `ActivityTracker`
+  derived the actor only from `agent_id`/`sender_id`; `reply_to_message`/`fail_message`/`request_input`/
+  `check_status` carry only a `message_id` (by D23 design — they're moments after a fresh `check_inbox`
+  so they intentionally don't refresh `last_seen`), so the human-facing feed showed "System" for every
+  reply/fail. Added `db.get_message_endpoints(message_id)` and had the middleware resolve a
+  **display-only** actor from the row: `check_status` → `sender_id` (sender polling its own message),
+  the ack tools → `recipient_id` (recipient acting on a claimed message). **`last_seen` untouched**
+  (D23 stands). Frontend already fell back to `'System'` for genuinely actor-less events (`list_agents`),
+  so no dashboard change. Helper unit-tested (`test_get_message_endpoints`).
+- **#3 — BaseHTTPMiddleware-over-SSE watch-item: left as-is.** `OriginValidationMiddleware` is a
+  Starlette `BaseHTTPMiddleware` (can buffer streaming in some versions) over the streamable-HTTP MCP
+  transport. No problem observed; added a code comment flagging it and kept the issue note open, rather
+  than a speculative pure-ASGI rewrite (churn with no evidence).
+- **Docs:** **D32** in `design-decisions.md` (+ footer); `specs.md` (Activity Panel attribution note +
+  tunables-single-sourced note); `architecture.md` (per-call logging note); `AGENTS.md` (tunables live
+  in `db.py`); `agent-hub-issues.md` AHB-14 → **fixed**. **AHB-11/12/13/14 now all fixed & committed.**
+
 ## 2026-07-11 (later) — AHB-13 fixed (D31): failure surfacing + failed-clarification un-park
 
 Directed follow-up to the eval: **build AHB-13**. Both agent-to-agent visibility gaps closed in

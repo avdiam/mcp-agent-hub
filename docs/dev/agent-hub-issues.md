@@ -25,7 +25,7 @@
 | AHB-11 | fixed | Result / `input_request` fan-out crashes when the original sender is offline / unknown / deleted | eval (avdia-req) | 2026-07-11 |
 | AHB-12 | fixed | Duplicate/late `input_request` reply revives an already-completed parent task | eval (avdia-req) | 2026-07-11 |
 | AHB-13 | fixed | Task failure / clarification-abandonment not surfaced to the sender's live inbox loop | eval (avdia-req) | 2026-07-11 |
-| AHB-14 | open | Minor hardening pass: duplicated magic constants + activity-feed actor attribution | eval (avdia-req) | 2026-07-11 |
+| AHB-14 | fixed | Minor hardening pass: duplicated magic constants + activity-feed actor attribution | eval (avdia-req) | 2026-07-11 |
 
 ---
 
@@ -735,22 +735,29 @@ own at-least-once guarantee.
 
 ## AHB-14 — Minor hardening pass (constants + activity-feed attribution)
 
-- **Status:** open — low priority, batch these when convenient (2026-07-11). Surfaced by the same eval.
+- **Status:** ✅ **fixed (2026-07-11) via D32.** Items 1 & 2 implemented; item 3 is a watch-item
+  (documented in code + kept open as a note, no change). `pytest` **26/26**.
 - **Reporter:** self-eval (requested by avdia, 2026-07-11).
 
 Small robustness/clarity items, none behavior-critical:
 
-1. **Duplicated magic constants across the module boundary.** `db.py` hardcodes the stale threshold
-   `90` (in `enqueue_message`) and the visibility cutoff `600` (in `peek_inbox`) instead of using
-   hub.py's `STALE_THRESHOLD` / `VISIBILITY_TIMEOUT`. Tuning the hub constants silently desyncs the DB
-   logic. Fix: pass them in, or centralize the constants in one module both import.
-2. **Activity feed attributes `reply_to_message` / `fail_message` / `request_input` / `check_status`
-   to "System".** The `ActivityTracker` middleware derives the caller only from `agent_id` /
-   `sender_id`; the message-id-only tools carry neither, so the dashboard shows those actions with no
-   agent. Intentional for `last_seen` (D23), but for the human-facing **feed** it loses "who replied /
-   failed." Fix: resolve the acting agent from the message row for **display only** (don't touch the
-   D23 `last_seen` semantics).
-3. **Watch-item (not a confirmed bug):** `OriginValidationMiddleware` is a Starlette
-   `BaseHTTPMiddleware`, which is known to buffer/interfere with SSE streaming in some versions, and
-   the MCP transport is streamable-HTTP. Working today; if streaming hiccups ever appear under load,
-   consider rewriting it as pure ASGI middleware.
+1. **✅ Duplicated magic constants across the module boundary.** `db.py` hardcoded the stale threshold
+   `90` (in `enqueue_message`) and the visibility cutoff `600` (in `peek_inbox`), and duplicated
+   `hub.py`'s `600`/`86400` as function defaults — so tuning a hub constant silently left the DB logic
+   on the old value. **Fixed:** `STALE_THRESHOLD` / `VISIBILITY_TIMEOUT` / `MESSAGE_TTL` are now defined
+   **once in `db.py`** (the lower layer — `hub.py` imports them, no circular import) and every db
+   function takes the matching keyword arg defaulting to that constant. A `hub.X is db.X` test
+   (`test_tunables_are_single_source`) + `test_enqueue_respects_stale_threshold` guard it.
+2. **✅ Activity feed attributed `reply_to_message` / `fail_message` / `request_input` / `check_status`
+   to "System".** The `ActivityTracker` derived the caller only from `agent_id` / `sender_id`; the
+   message-id-only tools carry neither. **Fixed:** the middleware now resolves the actor from the
+   message row **for display only** — `check_status` → `sender_id` (the sender polling its own message),
+   the ack tools → `recipient_id` (the recipient acting on a claimed message) — via a new
+   `db.get_message_endpoints` helper. **Does not touch `last_seen`** (D23 stands). Helper unit-tested
+   (`test_get_message_endpoints`); the frontend already fell back to `'System'` for genuinely
+   actor-less events (e.g. `list_agents`), so no dashboard change was needed.
+3. **Watch-item (not a confirmed bug) — LEFT AS-IS, documented.** `OriginValidationMiddleware` is a
+   Starlette `BaseHTTPMiddleware`, which is known to buffer/interfere with SSE streaming in some
+   versions, and the MCP transport is streamable-HTTP. Working today; a code comment at the class now
+   flags it. If streaming hiccups ever appear under load, rewrite it as pure ASGI middleware. Kept as a
+   standing note rather than a speculative rewrite.
