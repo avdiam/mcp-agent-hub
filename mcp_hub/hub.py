@@ -175,6 +175,9 @@ async def list_agents() -> list[dict]:
     """
     List all currently registered agents, their status, and their advertised skills.
     Use this to find an appropriate peer agent to send your task to.
+    Status reflects actual liveness: 'online' (recently active), 'stale' (registered but
+    silent past the freshness threshold — may be idle or gone), or 'offline' (explicitly
+    disconnected). Prefer 'online' agents when routing time-sensitive tasks.
     """
     return await db.get_all_agents(DB_PATH)
 
@@ -306,23 +309,17 @@ async def favicon_ico():
 
 @app.get("/api/state")
 async def api_state():
+    # get_all_agents returns status already liveness-derived (AHB-15/D34)
     agents = await db.get_all_agents(DB_PATH)
-    
-    # Process agents to add derived status
+
     now = time.time()
     for a in agents:
-        if a["status"] != "offline":
-            if now - a["last_seen"] > STALE_THRESHOLD:
-                a["status"] = "stale"
-            else:
-                a["status"] = "online"
-        
         # Parse skills back to list for JSON response
         try:
             a["skills"] = json.loads(a["skills"]) if a["skills"] else []
         except:
             a["skills"] = []
-            
+
     messages = await db.get_recent_messages(DB_PATH, limit=DASHBOARD_MESSAGE_LIMIT)
     stats = await db.get_stats(DB_PATH)
     

@@ -4,7 +4,7 @@ import asyncio
 from httpx import ASGITransport, AsyncClient
 
 from mcp_hub.hub import app, DB_PATH
-from mcp_hub.hub import register_agent, send_message, check_inbox, reply_to_message, check_status, request_input, broadcast_message
+from mcp_hub.hub import register_agent, send_message, check_inbox, reply_to_message, check_status, request_input, broadcast_message, list_agents
 import mcp_hub.db as db
 
 @pytest_asyncio.fixture
@@ -142,6 +142,32 @@ async def test_mcp_tool_roundtrip():
     status = await check_status(msg_id)
     assert status["status"] == "completed"
     assert status["response"] == "done"
+
+@pytest.mark.asyncio
+async def test_list_agents_status_is_liveness_derived(test_client):
+    # AHB-15/D34: the MCP tool must not report the stored sticky 'online' for a
+    # long-idle agent; list_agents and /api/state share one derivation and cannot diverge.
+    import time
+    import aiosqlite
+
+    await register_agent("fresh_peer", [], "recently active")
+    await register_agent("idle_peer", [], "long idle")
+
+    async with aiosqlite.connect(hub.DB_PATH) as conn:
+        await conn.execute(
+            "UPDATE agents SET last_seen=? WHERE id=?",
+            (time.time() - db.STALE_THRESHOLD - 60, "idle_peer"),
+        )
+        await conn.commit()
+
+    tool_statuses = {a["id"]: a["status"] for a in await list_agents()}
+    assert tool_statuses["fresh_peer"] == "online"
+    assert tool_statuses["idle_peer"] == "stale"
+
+    res = await test_client.get("/api/state", headers={"Origin": "http://localhost"})
+    assert res.status_code == 200
+    api_statuses = {a["id"]: a["status"] for a in res.json()["agents"]}
+    assert api_statuses == tool_statuses
 
 @pytest.mark.asyncio
 async def test_api_reset(test_client):

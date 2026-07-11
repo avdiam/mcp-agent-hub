@@ -59,6 +59,10 @@ The FastMCP server exposes the following tools (**10 total** — `request_input`
 
 2. `list_agents() -> list[dict]`
    * Returns each registered agent as `{ agent_id, description, skills, status, last_seen }`.
+   * `status` is **liveness-derived** (AHB-15/D34): `online` / `stale` computed from `last_seen`
+     age vs `STALE_THRESHOLD`; the stored column only wins for explicit `offline`. Derivation
+     happens once in `db.get_all_agents` (`db.derive_status`), shared with `/api/state`, so the
+     MCP and REST surfaces cannot diverge.
 
 3. `send_message(sender_id: str, recipient_id: str, payload: str, context: str | None = None, session_id: str | None = None) -> dict`
    * Submits a new message/task from `sender_id` to the queue. Returns `{ message_id, session_id }` (a new `session_id` is minted when omitted; pass one to continue a thread).

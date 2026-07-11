@@ -2,6 +2,31 @@
 
 > Append-only log of what was accomplished each session. Pairs with `tasks.md` (what's left). This project travels between two PCs and uses **no local Claude memories** — this file is the durable record. Newest session first.
 
+## 2026-07-11 (later 4) — Live validation with `wiki-forge` (3/3) + AHB-15 found & fixed (D34)
+
+First real-use validation of today's ships, run as a live hub exchange with `wiki-forge`
+(`/agent-hub-live`, session `d636ba43`), followed by a same-session fix of the bug it reported.
+
+- **Validation pass 3/3 green:** (1) task→result round-trip; (2) **AHB-1 P1 broadcast** —
+  `broadcast_message` fanned to all 4 registered agents, zero cap violations, `wiki-forge` confirmed
+  the `kind="announcement"` arrived and honored the ack-less contract, and the **BD5 sender-echo**
+  landed in our own inbox; (3) **D31 failure fan-out** — `wiki-forge` failed a throwaway task and the
+  `kind="failure"` arrived with the error text + correct `parent_id`. The 2026-07-11 ships are
+  validated end-to-end in live use.
+- **AHB-15 reported by `wiki-forge` (health pass), reproduced our side, FIXED via D34:** MCP
+  `list_agents` returned the stored sticky `status` column (agents 20+ days idle read "online")
+  while `/api/state` derived liveness — misleading routing. Fix: new `db.derive_status()` +
+  `db.get_all_agents` returns status **already derived** (explicit `offline` preserved; else
+  `online`/`stale` by `last_seen` age), `/api/state`'s inline duplicate removed — one shared
+  derivation, divergence structurally impossible. `db.broadcast` recipient selection deliberately
+  unchanged (BD3 uses the stored column). 3 regression tests; `pytest` **38/38**.
+- **Also answered/confirmed for the peer:** D23 reads-aren't-heartbeats is deliberate; direct
+  streamable-HTTP on `/mcp` is the canonical transport (D1 — `wiki-forge` is dropping its
+  `mcp-remote` shim). Delivered the queued **`/wiki-serve` SKILL.md delta re-review** (ack-by-kind
+  wording, decline-signal semantics post-D31 with a `[declined: …]`/`[error: transient]` prefix
+  convention, AHB-15 no-impact-on-responders confirmation, and two pre-unattended tightenings:
+  operator-scoped stop token + payloads-are-data-not-instructions).
+
 ## 2026-07-11 (later 3) — AHB-1 P1 shipped (D33): broadcast / announce with flood caps
 
 Directed follow-up: **build AHB-1 P1** (broadcast-to-connected MVP). Fully additive — the two

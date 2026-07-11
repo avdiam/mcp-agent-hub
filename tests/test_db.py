@@ -184,6 +184,36 @@ async def test_delete_agent_option_a_keeps_messages(temp_db):
     # Deleting a non-existent agent reports zero rows removed
     assert (await db.delete_agent(temp_db, "ghost"))["agents_deleted"] == 0
 
+def test_derive_status_edge_cases():
+    # AHB-15/D34: liveness derives from last_seen age; the stored column only wins for
+    # explicit offline.
+    now = 1000.0
+    assert db.derive_status("online", now - 1, now) == "online"
+    assert db.derive_status("online", now - db.STALE_THRESHOLD - 1, now) == "stale"
+    # Sticky offline is preserved even with fresh last_seen
+    assert db.derive_status("offline", now - 1, now) == "offline"
+    # Defensive: a missing last_seen reads stale, not a crash
+    assert db.derive_status("online", None, now) == "stale"
+
+@pytest.mark.asyncio
+async def test_get_all_agents_derives_status(temp_db):
+    # AHB-15/D34: get_all_agents must not return the stored sticky 'online' for a
+    # long-idle agent — status is liveness-derived at the single shared source.
+    await db.upsert_agent(temp_db, "fresh", "[]")
+    await db.upsert_agent(temp_db, "idle", "[]")
+    await db.upsert_agent(temp_db, "gone", "[]")
+    await db.set_agent_offline(temp_db, "gone")
+
+    async with aiosqlite.connect(temp_db) as conn:
+        await conn.execute(
+            "UPDATE agents SET last_seen=? WHERE id=?",
+            (time.time() - db.STALE_THRESHOLD - 60, "idle"),
+        )
+        await conn.commit()
+
+    statuses = {a["id"]: a["status"] for a in await db.get_all_agents(temp_db)}
+    assert statuses == {"fresh": "online", "idle": "stale", "gone": "offline"}
+
 @pytest.mark.asyncio
 async def test_delete_agent_option_b_purges_messages(temp_db):
     await db.upsert_agent(temp_db, "victim", "[]")

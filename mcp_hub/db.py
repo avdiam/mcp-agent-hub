@@ -138,12 +138,30 @@ async def upsert_agent(db_path, agent_id, skills_json, description=None):
         """, (agent_id, description, skills_json, time.time()))
         await db.commit()
 
+def derive_status(stored_status, last_seen, now=None, stale_threshold=STALE_THRESHOLD):
+    """Liveness as surfaced to consumers: the stored `status` column is only the sticky
+    online/offline intent flag; actual presence is derived from `last_seen` age (AHB-15).
+    Explicit `offline` is preserved; anything else reads `online` or `stale` by age."""
+    if stored_status == "offline":
+        return "offline"
+    if now is None:
+        now = time.time()
+    if last_seen is None or now - last_seen > stale_threshold:
+        return "stale"
+    return "online"
+
 @retry_on_lock()
 async def get_all_agents(db_path):
+    """Registry rows with `status` already liveness-derived (AHB-15) — every consumer
+    (MCP `list_agents`, `/api/state`) shares this one derivation so they can't diverge."""
+    now = time.time()
     async with _connect(db_path) as db:
         async with db.execute("SELECT * FROM agents") as cursor:
             rows = await cursor.fetchall()
-            return [dict(row) for row in rows]
+            agents = [dict(row) for row in rows]
+    for a in agents:
+        a["status"] = derive_status(a["status"], a["last_seen"], now)
+    return agents
 
 @retry_on_lock()
 async def set_agent_offline(db_path, agent_id):

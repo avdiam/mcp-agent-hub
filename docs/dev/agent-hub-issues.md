@@ -26,6 +26,7 @@
 | AHB-12 | fixed | Duplicate/late `input_request` reply revives an already-completed parent task | eval (avdia-req) | 2026-07-11 |
 | AHB-13 | fixed | Task failure / clarification-abandonment not surfaced to the sender's live inbox loop | eval (avdia-req) | 2026-07-11 |
 | AHB-14 | fixed | Minor hardening pass: duplicated magic constants + activity-feed actor attribution | eval (avdia-req) | 2026-07-11 |
+| AHB-15 | fixed | MCP `list_agents` returns the stored sticky `status`, not liveness derived from `last_seen` | wiki-forge (peer) | 2026-07-11 |
 
 ---
 
@@ -779,3 +780,36 @@ Small robustness/clarity items, none behavior-critical:
    versions, and the MCP transport is streamable-HTTP. Working today; a code comment at the class now
    flags it. If streaming hiccups ever appear under load, rewrite it as pure ASGI middleware. Kept as a
    standing note rather than a speculative rewrite.
+
+---
+
+## AHB-15 — MCP `list_agents` returns the stored sticky `status`, not liveness derived from `last_seen`
+
+- **Status:** ✅ **fixed (2026-07-11) via D34.** New `db.derive_status(stored_status, last_seen, now,
+  stale_threshold)` helper; `db.get_all_agents` now returns `status` already derived (explicit
+  `offline` preserved; else `online`/`stale` by `last_seen` age), so the MCP `list_agents` tool and
+  `/api/state` — its only two consumers — share one derivation and **cannot** diverge. `/api/state`'s
+  inline duplicate removed; `list_agents` docstring now explains the three states to routing peers.
+  Defensive: `NULL last_seen` reads `stale` instead of crashing. `db.broadcast` recipient selection
+  deliberately unchanged (BD3 targets the stored column: online + stale, skip explicit offline).
+  3 regression tests added (`test_derive_status_edge_cases`, `test_get_all_agents_derives_status`,
+  `test_list_agents_status_is_liveness_derived` — the last asserts tool + REST agree); `pytest` 38/38.
+- **Reporter:** `wiki-forge` (peer), from a hub health pass; independently observed same-day by
+  `agent-hub-builder` (all 4 agents "online" in `list_agents` with two of them 20+ days idle).
+- **Relates to:** D23 (`last_seen` semantics), AHB-3/D29 (presence-freshness), `/api/state`'s derived
+  status (`hub.py` stale derivation), AHB-1 BD3 (broadcast targets `status != 'offline'` — stored
+  column, unaffected by design but worth rechecking when this lands).
+
+### Problem (confirmed both sides)
+The MCP `list_agents` tool returns the **stored `status` column** (the sticky online/offline intent
+flag), while REST `/api/state` **derives** liveness from `last_seen` age (`now - last_seen >
+STALE_THRESHOLD`). The two surfaces diverge: `list_agents` reported `antigravity-2` (21 d idle) and
+`nexus` (20 d idle) as `online`. Impact: any peer that trusts `list_agents` to pick a recipient is
+misled into routing tasks to dead agents (then hits the offline/stale flags at enqueue).
+
+### Proposed fix (per reporter, agreed)
+Extract the `/api/state` derive-status logic into one shared helper (e.g. `_derive_status(now,
+last_seen, stored_status)`) and apply it in the `list_agents` path too — or compute it in
+`db.list_agents` — so the two surfaces cannot diverge. Add a regression test: an agent with fresh
+`last_seen` reads `online`; the same agent past `STALE_THRESHOLD` reads `stale` from **both**
+`list_agents` and `/api/state`.
