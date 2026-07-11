@@ -2,6 +2,47 @@
 
 > Append-only log of what was accomplished each session. Pairs with `tasks.md` (what's left). This project travels between two PCs and uses **no local Claude memories** — this file is the durable record. Newest session first.
 
+## 2026-07-11 — Full-project eval → AHB-11 + AHB-12 fixed (D30); AHB-13/14 logged
+
+avdia-requested full evaluation of the project (MCP server, db logic, dashboard, scripts, tests,
+security). Read every source + doc, ran `pytest` (15/15 green baseline), and probed edge cases
+against a scratch DB (`scratchpad/verify_edges.py`, not committed). Surfaced 3 protocol-correctness
+bugs + minor items; fixed the two confirmed high/medium ones, logged the rest.
+
+- **AHB-11 (fixed) — fan-out crashed on offline/unknown/deleted sender.** `complete_message` marks a
+  task `completed` + commits, then fans a `kind="result"` back to the **original sender** via
+  `enqueue_message` — which raised `ValueError` if that sender was `offline`/unknown (the D6
+  point-to-point guard). Net: a worker completing a task for a since-departed sender got a **spurious
+  error on `reply_to_message`** (task actually done) **and the result was dropped**. `request_input`
+  had the same bug. **Confirmed in live `hub.log`** (`Recipient antigravity-cli is offline`
+  tracebacks) + scratch-DB repro for offline / deleted / never-registered. **Fix (D30):**
+  `enqueue_message(..., internal=True)` bypasses the guard for the D20 result + D17 `input_request`
+  fan-out (best-effort delivery to a reconnectable inbox). Mirrors the **AHB-1 BD3** broadcast rule,
+  so AHB-1 P1 inherits the corrected behavior.
+- **AHB-12 (fixed) — duplicate `input_request` reply revived a completed parent.** `complete_message`
+  un-parked the parent **unconditionally** on any `input_request` completion, so a duplicate/late
+  reply (at-least-once redelivery, or answering twice) flipped an already-`completed` parent back to
+  `pending` → **duplicate work**, silently reopening a done task. **Fix (D30):** un-park only when the
+  parent is still `input_required` (idempotent).
+- **Tests:** added 4 `test_db.py` regressions (result fan-out survives offline + unknown sender;
+  `request_input` survives offline sender; duplicate input-reply doesn't revive parent). `pytest`
+  **19/19**. Re-ran the scratch-DB probe: CASE1/2/6 now succeed, CASE3 parent stays `completed`.
+- **AHB-13 (logged, open, scoped) — failure/abandonment invisible to the sender's live loop.**
+  (#3) `fail_message` on a task fans out **nothing**, so a sender long-polling `check_inbox` for a
+  failed task waits forever (D20 promises the inbox surfaces sent-message status — true only for
+  success). (#4) `fail_message` on an `input_request` strands the parent `input_required` forever
+  (TTL sweep is `pending kind='task'` only, D24). Both confirmed. Overlaps the v2 cascade-expire
+  item. **Not built** — awaiting go-ahead; proposed fixes in `agent-hub-issues.md`.
+- **AHB-14 (logged, open, low-pri) — minor hardening pass.** Duplicated magic constants in `db.py`
+  (`90`, `600` vs hub.py's `STALE_THRESHOLD`/`VISIBILITY_TIMEOUT`); activity feed attributes
+  message-id-only tools (`reply`/`fail`/`request_input`/`check_status`) to "System"; a watch-item
+  that `OriginValidationMiddleware` is `BaseHTTPMiddleware` over an SSE transport (working today).
+- **Security:** no new issues. Trust model (localhost bind, Origin/Host/Sec-Fetch-Site), dashboard
+  output-escaping, and CSP all sound and correctly implemented. Findings were correctness, not exploits.
+- **Docs updated in the same change:** D30 in `design-decisions.md`; `specs.md` (D20 fan-out bypass +
+  D17 conditional un-park + `disconnect_agent` point-to-point clarification); `agent-hub-issues.md`
+  (AHB-11/12 fixed, AHB-13/14 added); `tasks.md` START-HERE.
+
 ## 2026-06-20 (cont.) — AHB-5 re-verify · AHB-8 + AHB-9 (live wiki-forge coordination)
 
 Same live `/agent-hub-live` session; a full mutual-verify + coordination round with `wiki-forge`

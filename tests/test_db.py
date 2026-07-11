@@ -230,3 +230,72 @@ async def test_result_fan_out(temp_db):
         async with conn.execute("SELECT status FROM messages WHERE id=?", (req_claimed[0]["id"],)) as cursor:
             row = await cursor.fetchone()
             assert row[0] == "completed"
+
+@pytest.mark.asyncio
+async def test_result_fanout_survives_offline_sender(temp_db):
+    # AHB-11: completing a task must NOT raise even if the original sender has since
+    # gone offline — the result is still delivered to their inbox (best-effort).
+    await db.upsert_agent(temp_db, "requester", "[]")
+    await db.upsert_agent(temp_db, "worker", "[]")
+    task = await db.enqueue_message(temp_db, "requester", "worker", "do work")
+    await db.claim_pending(temp_db, "worker")
+    await db.set_agent_offline(temp_db, "requester")
+
+    # Previously raised "Recipient requester is offline"; must now succeed.
+    await db.complete_message(temp_db, task["message_id"], "done")
+
+    assert (await db.get_status(temp_db, task["message_id"]))["status"] == "completed"
+
+    # The result was still enqueued for the (now offline) requester.
+    async with aiosqlite.connect(temp_db) as conn:
+        async with conn.execute(
+            "SELECT response FROM messages WHERE recipient_id='requester' AND kind='result'"
+        ) as cursor:
+            row = await cursor.fetchone()
+            assert row is not None and row[0] == "done"
+
+@pytest.mark.asyncio
+async def test_result_fanout_survives_unknown_sender(temp_db):
+    # AHB-11: the original sender was never registered (or was deleted) — completion
+    # must still succeed rather than crash the worker's reply.
+    await db.upsert_agent(temp_db, "worker", "[]")
+    task = await db.enqueue_message(temp_db, "ghost-sender", "worker", "do work")
+    await db.claim_pending(temp_db, "worker")
+
+    await db.complete_message(temp_db, task["message_id"], "done")  # ghost-sender is unknown
+    assert (await db.get_status(temp_db, task["message_id"]))["status"] == "completed"
+
+@pytest.mark.asyncio
+async def test_request_input_survives_offline_sender(temp_db):
+    # AHB-11: asking for clarification fans an input_request back to the original
+    # sender; that internal delivery must also bypass the offline guard.
+    await db.upsert_agent(temp_db, "requester", "[]")
+    await db.upsert_agent(temp_db, "worker", "[]")
+    task = await db.enqueue_message(temp_db, "requester", "worker", "do work")
+    await db.claim_pending(temp_db, "worker")
+    await db.set_agent_offline(temp_db, "requester")
+
+    # Previously raised "Recipient requester is offline".
+    req = await db.request_input(temp_db, task["message_id"], "which color?")
+    assert req["request_message_id"]
+
+@pytest.mark.asyncio
+async def test_duplicate_input_reply_does_not_revive_completed_parent(temp_db):
+    # AHB-12: a duplicate/late reply to an input_request must not reopen a parent task
+    # that has already moved past input_required.
+    await db.upsert_agent(temp_db, "req", "[]")
+    await db.upsert_agent(temp_db, "wrk", "[]")
+    task = await db.enqueue_message(temp_db, "req", "wrk", "task")
+    tid = task["message_id"]
+    await db.claim_pending(temp_db, "wrk")
+    r = await db.request_input(temp_db, tid, "which?")
+    rid = r["request_message_id"]
+    await db.claim_pending(temp_db, "req")
+    await db.complete_message(temp_db, rid, "answer")      # first reply un-parks parent
+    await db.claim_pending(temp_db, "wrk")                 # worker reclaims parent
+    await db.complete_message(temp_db, tid, "task done")   # worker completes parent
+    assert (await db.get_status(temp_db, tid))["status"] == "completed"
+
+    # Duplicate reply to the SAME input_request must NOT revive the completed parent.
+    await db.complete_message(temp_db, rid, "answer again")
+    assert (await db.get_status(temp_db, tid))["status"] == "completed"

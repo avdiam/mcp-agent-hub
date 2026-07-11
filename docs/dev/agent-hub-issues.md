@@ -22,6 +22,10 @@
 | AHB-8 | fixed | `SessionStart` sentinel-clear for the gated Stop-drain (crash-safety vs stale sentinel) | wiki-forge (peer) | 2026-06-20 |
 | AHB-9 | fixed | Converge canonical `hub_peek.py` with wiki-forge's divergent nudge fork (AHB-4 follow-up) | wiki-forge (peer) | 2026-06-20 |
 | AHB-10 | open | No canonical distribution channel — peers re-vendor by manual hub-paste (needs published remote) | nexus (peer) | 2026-06-20 |
+| AHB-11 | fixed | Result / `input_request` fan-out crashes when the original sender is offline / unknown / deleted | eval (avdia-req) | 2026-07-11 |
+| AHB-12 | fixed | Duplicate/late `input_request` reply revives an already-completed parent task | eval (avdia-req) | 2026-07-11 |
+| AHB-13 | open | Task failure / clarification-abandonment not surfaced to the sender's live inbox loop | eval (avdia-req) | 2026-07-11 |
+| AHB-14 | open | Minor hardening pass: duplicated magic constants + activity-feed actor attribution | eval (avdia-req) | 2026-07-11 |
 
 ---
 
@@ -618,3 +622,120 @@ Fold into the Distribution decision: when the repo is published, **broadcast the
 AHB-1 broadcast/announce) so all peers can pin a real origin and self-serve future pulls. Until
 then, hub-paste remains the stopgap. No standalone build — this is a prioritization signal for the
 already-tracked publish work, logged so the friction isn't lost.
+
+---
+
+## AHB-11 — Result / `input_request` fan-out crashes when the original sender is offline / unknown / deleted
+
+- **Status:** ✅ **fixed (2026-07-11) via D30.** `db.enqueue_message` gained an `internal=False`
+  parameter; the D20 **result** fan-out and the D17 **`input_request`** fan-out now call it with
+  `internal=True`, which **bypasses the unknown/offline `ValueError`** guard. Regression tests added
+  (`test_result_fanout_survives_offline_sender`, `test_result_fanout_survives_unknown_sender`,
+  `test_request_input_survives_offline_sender`). `pytest` 19/19.
+- **Reporter:** self-eval (full project review requested by avdia, 2026-07-11).
+- **Relates to:** D6 (offline-reject on point-to-point sends), D20 (result fan-out), D17 (`input_request`),
+  and **AHB-1 BD3** (the broadcast plan already specifies this exact bypass for fan-out).
+
+### Problem (confirmed in code + live logs)
+`complete_message` (`db.py`) marks a task `completed` and commits, **then** calls `enqueue_message`
+to deliver the `kind="result"` message back to the **original sender**. But `enqueue_message` raises
+`ValueError` if that recipient is `offline` or unknown (the D6 guard, meant for point-to-point
+`send_message`). So when a worker completes a task whose sender has since **gone offline, been
+deleted, or was never registered**, the worker's `reply_to_message` call **raises** — even though the
+task genuinely completed (the parent `UPDATE` already committed) — and **no result is delivered**. The
+worker sees a spurious error and may retry. `request_input` had the same bug (its question fan-out is
+also point-to-point-guarded). Observed live: `hub.log` carries real `Recipient antigravity-cli is
+offline` / `antigravity-2 is offline` tracebacks. Reproduced against a scratch DB for offline,
+deleted, and never-registered senders.
+
+### Fix
+Internal, hub-generated deliveries are not agent-initiated point-to-point sends, so the "no sends to
+a dead peer" guard shouldn't apply to them — the result/question goes best-effort to a reconnectable
+inbox. `internal=True` skips the raise (and, for a truly-unknown recipient, inserts with
+`flagged_stale=0`). Mirrors AHB-1 **BD3**, so building AHB-1 P1 inherits the corrected behavior.
+
+---
+
+## AHB-12 — Duplicate/late `input_request` reply revives an already-completed parent task
+
+- **Status:** ✅ **fixed (2026-07-11) via D30.** `complete_message` now un-parks the parent **only when
+  its status is still `input_required`**. Regression test added
+  (`test_duplicate_input_reply_does_not_revive_completed_parent`). `pytest` 19/19.
+- **Reporter:** self-eval (requested by avdia, 2026-07-11).
+- **Relates to:** D17 (`input_required` park/un-park), D3/D4 (at-least-once ⇒ possible duplicate delivery).
+
+### Problem (confirmed against a scratch DB)
+`complete_message` un-parked the parent task **unconditionally** whenever the completed message was a
+`kind="input_request"` with a `parent_id`. So a **second** reply to the same clarification — from
+at-least-once redelivery, or the requester simply answering twice — flipped a parent that had already
+moved on (e.g. `completed`) **back to `pending`**, redelivering it to the worker as **duplicate work**
+and silently reopening a finished task.
+
+### Fix
+Gate the un-park on `parent.status == 'input_required'`. The first reply (parent still parked)
+un-parks as before; any later duplicate is a no-op. Makes the un-park idempotent under the queue's
+own at-least-once guarantee.
+
+---
+
+## AHB-13 — Task failure / clarification-abandonment not surfaced to the sender's live inbox loop
+
+- **Status:** open — scoped 2026-07-11, **not built**. Two related visibility gaps in the
+  agent-to-agent protocol; both leave a sender's live `check_inbox` loop waiting with no signal.
+- **Reporter:** self-eval (requested by avdia, 2026-07-11).
+- **Relates to:** D20 (the "results reach you via your inbox, no status-polling needed" contract),
+  D24 (TTL sweep targets `pending kind='task'` only), the v2 **cascade-expire parked tasks** item
+  in `tasks.md`, and the `agent-hub-live` SKILL loop (which never falls back to `check_status`).
+
+### Problem (both confirmed against a scratch DB)
+1. **Failure is invisible to the sender (#3).** `fail_message` sets the task `failed` but **fans out
+   nothing**. D20 promises the inbox surfaces "the changing status of your own sent messages… no
+   separate status polling needed" — but that only holds for **success**. A sender long-polling
+   `check_inbox` for a task the worker *fails* waits until its idle cap with **no signal**, because
+   the live loop (`SKILL.md`) never calls `check_status`. Confirmed: sender inbox is empty after a
+   task failure.
+2. **Failing/abandoning a clarification strands the parent forever (#4).** If the requester
+   `fail_message`s an `input_request` (explicitly permitted by `SKILL.md`: "If you cannot complete a
+   task, `fail_message`…"), the parent task stays `input_required` and is **never swept** — the TTL
+   sweep targets `pending kind='task'` only (D24 carve-out). Confirmed: parent stays `input_required`
+   even after the TTL sweep. This is the known v2 *cascade-expire* gap, but the **explicit-fail** path
+   (not just silent abandonment) makes it more reachable than the v2 note framed it.
+
+### Proposed fix (to scope)
+- **#3:** on `fail_message` of a `task`, fan out a failure notification to the sender — either a
+  `kind="result"` carrying the error (simplest; the live loop already treats `result` as ack-less and
+  surfaces it), or a distinct `kind` / a `failed` flag on the result so the sender can tell success
+  from failure. Decide whether a `request_input` failure should notify the *worker* symmetrically.
+- **#4:** when an `input_request` is **failed** (as opposed to answered), decide the parent's fate —
+  fail the parent, or return it to `pending` with the failure noted in `context` so the worker can
+  proceed/abort — rather than leaving it parked forever. This overlaps the v2 cascade-expire design;
+  fold the two together.
+
+### Notes
+- Ties into the D20 contract wording — if fixed, update `SKILL.md`/`SETUP.md` "no status-polling
+  needed" to cover failures, and `specs.md` D20/`fail_message`.
+- Effort: small–medium. Get the `#3` happy-path + a redelivery/idempotency test green first.
+
+---
+
+## AHB-14 — Minor hardening pass (constants + activity-feed attribution)
+
+- **Status:** open — low priority, batch these when convenient (2026-07-11). Surfaced by the same eval.
+- **Reporter:** self-eval (requested by avdia, 2026-07-11).
+
+Small robustness/clarity items, none behavior-critical:
+
+1. **Duplicated magic constants across the module boundary.** `db.py` hardcodes the stale threshold
+   `90` (in `enqueue_message`) and the visibility cutoff `600` (in `peek_inbox`) instead of using
+   hub.py's `STALE_THRESHOLD` / `VISIBILITY_TIMEOUT`. Tuning the hub constants silently desyncs the DB
+   logic. Fix: pass them in, or centralize the constants in one module both import.
+2. **Activity feed attributes `reply_to_message` / `fail_message` / `request_input` / `check_status`
+   to "System".** The `ActivityTracker` middleware derives the caller only from `agent_id` /
+   `sender_id`; the message-id-only tools carry neither, so the dashboard shows those actions with no
+   agent. Intentional for `last_seen` (D23), but for the human-facing **feed** it loses "who replied /
+   failed." Fix: resolve the acting agent from the message row for **display only** (don't touch the
+   D23 `last_seen` semantics).
+3. **Watch-item (not a confirmed bug):** `OriginValidationMiddleware` is a Starlette
+   `BaseHTTPMiddleware`, which is known to buffer/interfere with SSE streaming in some versions, and
+   the MCP transport is streamable-HTTP. Working today; if streaming hiccups ever appear under load,
+   consider rewriting it as pure ASGI middleware.

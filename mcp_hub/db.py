@@ -142,23 +142,29 @@ async def touch_last_seen(db_path, agent_id):
         await db.commit()
 
 @retry_on_lock()
-async def enqueue_message(db_path, sender_id, recipient_id, payload, context=None, session_id=None, parent_id=None, kind="task", response=None, subject=None):
+async def enqueue_message(db_path, sender_id, recipient_id, payload, context=None, session_id=None, parent_id=None, kind="task", response=None, subject=None, internal=False):
     message_id = str(uuid.uuid4())
     if not session_id:
         session_id = str(uuid.uuid4())
-        
+
     async with _connect(db_path) as db:
         async with db.execute("SELECT status, last_seen FROM agents WHERE id=?", (recipient_id,)) as cursor:
             row = await cursor.fetchone()
+            # Point-to-point sends reject unknown/offline recipients. Internal deliveries
+            # (result / input_request fan-out) MUST bypass that guard: the originating task
+            # already completed, so raising here would surface a spurious error to the
+            # worker AND drop the fan-out. Mirrors the AHB-1 BD3 broadcast rule. (AHB-11)
             if not row:
-                raise ValueError(f"Recipient {recipient_id} is unknown")
-            if row["status"] == "offline":
-                raise ValueError(f"Recipient {recipient_id} is offline")
-                
-            is_stale = 0
-            if time.time() - row["last_seen"] > 90:
-                is_stale = 1
-                
+                if not internal:
+                    raise ValueError(f"Recipient {recipient_id} is unknown")
+                is_stale = 0
+            else:
+                if row["status"] == "offline" and not internal:
+                    raise ValueError(f"Recipient {recipient_id} is offline")
+                is_stale = 0
+                if time.time() - row["last_seen"] > 90:
+                    is_stale = 1
+
         now = time.time()
         await db.execute("""
             INSERT INTO messages (
@@ -240,7 +246,8 @@ async def request_input(db_path, message_id, question):
         payload=question,
         session_id=row["session_id"],
         parent_id=message_id,
-        kind="input_request"
+        kind="input_request",
+        internal=True,
     )
     return {"request_message_id": res["message_id"], "session_id": res["session_id"]}
 
@@ -256,11 +263,15 @@ async def complete_message(db_path, message_id, response):
         await db.execute("UPDATE messages SET status='completed', response=?, updated_at=? WHERE id=?", (response, now, message_id))
             
         if row["kind"] == "input_request" and row["parent_id"]:
-            # Un-park parent task
-            async with db.execute("SELECT context FROM messages WHERE id=?", (row["parent_id"],)) as cursor:
+            # Un-park the parent task ONLY if it is still awaiting this clarification.
+            # A duplicate/late reply (at-least-once redelivery, or the requester answering
+            # twice) must not revive a parent that already moved on — that would reopen a
+            # completed task as duplicate work. (AHB-12)
+            async with db.execute("SELECT status, context FROM messages WHERE id=?", (row["parent_id"],)) as cursor:
                 parent = await cursor.fetchone()
+            if parent and parent["status"] == "input_required":
                 new_context = (parent["context"] or "") + f"\n[Clarification Answer]: {response}"
-            await db.execute("UPDATE messages SET status='pending', claimed_at=NULL, context=?, updated_at=? WHERE id=?", (new_context, now, row["parent_id"]))
+                await db.execute("UPDATE messages SET status='pending', claimed_at=NULL, context=?, updated_at=? WHERE id=?", (new_context, now, row["parent_id"]))
             
         await db.commit()
         
@@ -274,7 +285,8 @@ async def complete_message(db_path, message_id, response):
             response=response,
             session_id=row["session_id"],
             parent_id=message_id,
-            kind="result"
+            kind="result",
+            internal=True,
         )
 
 @retry_on_lock()
