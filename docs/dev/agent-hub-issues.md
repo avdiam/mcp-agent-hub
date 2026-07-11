@@ -12,7 +12,7 @@
 
 | ID | Status | Title | Reporter | Opened |
 |----|--------|-------|----------|--------|
-| AHB-1 | P1 fixed | Broadcast / announce capability (with flood caps) — P1 shipped (D33); P2 deferred | avdia (user) | 2026-06-19 |
+| AHB-1 | fixed | Broadcast / announce capability (with flood caps) — P1 shipped (D33); P2 catch-up + dashboard control shipped (D35) | avdia (user) | 2026-06-19 |
 | AHB-2 | open | Job-offer board: offer → claim → 2-way verify → assign/drop (P2-era) | avdia (user) | 2026-06-19 |
 | AHB-3 | fixed | No-claim heartbeat endpoint (refresh `last_seen` without claiming) | wiki-forge (peer) | 2026-06-19 |
 | AHB-4 | fixed | Canonical `hub_peek.py` improvements (backport from wiki-forge variant) | nexus (peer) | 2026-06-20 |
@@ -32,9 +32,29 @@
 
 ## AHB-1 — Broadcast / announce capability (with flood caps)
 
-- **Status:** ✅ **P1 SHIPPED (2026-07-11) via D33**; P2 (durable announcements for late joiners) deferred.
+- **Status:** ✅ **FIXED — P1 SHIPPED (2026-07-11) via D33; P2 SHIPPED (2026-07-11) via D35.**
 - **Reporter:** avdia (user)
 - **Opened:** 2026-06-19
+
+### P2 as shipped (2026-07-11, D35)
+**Durable announcements via register-time catch-up.** No new `announcements` table and no read
+cursor: the P1 **`broadcasts`** audit table is the durable store (gained a `context` column via a
+try/except `ALTER` migration), and dedupe is **structural** — fan-out and catch-up rows carry
+`session_id = broadcast_id`, so "already received" = "a messages row exists in any status".
+New `db.deliver_missed_broadcasts(agent_id, window=BROADCAST_CATCHUP_WINDOW=24h)` is called by
+`register_agent` after the upsert: every in-window broadcast the registrant never received is
+queued as a fresh pending `kind="announcement"` (delivered through the existing inbox / long-poll
+/ nudge / ack-less pipeline — zero new client behavior, tool count stays 10); the register return
+string notes the count. Idempotent across re-registers; covers both true late joiners and agents
+explicitly offline at broadcast time (BD3 skip). Window confirmed with the user at **24h**
+(announcements are recent news, not a permanent MOTD). Plus the **dashboard Broadcast control**:
+`POST /api/broadcast` sends as the fixed unregistered sender **`operator`** through the same
+capped `db.broadcast` path (no self-echo; cap violation → clean 400), with a compose modal
+(subject + payload) in the toolbar. **6 new tests** (`test_db.py` catch-up delivers faithfully /
+structural dedupe incl. post-claim / window respected / offline-at-broadcast covered;
+`test_mcp.py` register-catch-up end-to-end + `/api/broadcast` happy path & cap-400) →
+`pytest` **44/44**. Docs: **D35**, `specs.md` (tools #1/#4, `broadcasts` schema),
+`architecture.md`, `AGENTS.md`.
 
 ### P1 as shipped (2026-07-11)
 New 10th MCP tool **`broadcast_message(sender_id, payload, subject?, context?)`** → **`db.broadcast`**,
@@ -205,8 +225,11 @@ kinds, caps, NO_ACK_KINDS), `README.md` (tool list), the `agent-hub-live` SKILL/
 4. **Echo to sender.** ✅ **Yes** — the sender receives its own broadcast (BD5 updated).
 5. **Ack-less auto-complete-on-claim.** ✅ Accepted for now; revisit during P2.
 
-→ **P1 SHIPPED 2026-07-11 (D33).** See "P1 as shipped" at the top of this issue. **P2 (durable
-announcements / MOTD for late joiners) remains the next phase** — build after P1 is validated in use.
+→ **P1 SHIPPED 2026-07-11 (D33).** See "P1 as shipped" at the top of this issue. → **P2 SHIPPED
+2026-07-11 (D35)** after P1 was validated live with `wiki-forge` — see "P2 as shipped" above. Note
+the shipped P2 diverged from this sketch's data model (no `announcements` table, no read cursor —
+the `broadcasts` audit table + structural `session_id` dedupe replaced both) and skipped the
+`get_announcements` tool (register-time delivery through the existing inbox pipeline).
 
 ### Rough sequencing / effort
 - **P1:** `broadcasts` table + `broadcast()` + caps + `broadcast_message` tool +

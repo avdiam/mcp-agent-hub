@@ -32,6 +32,7 @@ BROADCAST_MAX_SUBJECT = 120     # characters — max broadcast subject
 BROADCAST_MIN_INTERVAL = 30     # seconds — per-sender cooldown between broadcasts
 BROADCAST_HOURLY_CAP = 10       # broadcasts per sender per rolling hour
 BROADCAST_MAX_RECIPIENTS = 200  # safety ceiling on fan-out size per broadcast
+BROADCAST_CATCHUP_WINDOW = 86400  # seconds a broadcast stays deliverable to late joiners (AHB-1 P2)
 
 
 
@@ -116,10 +117,16 @@ async def init_db(db_path="hub.db"):
                 sender_id TEXT,
                 subject TEXT,
                 payload TEXT,
+                context TEXT,
                 recipient_count INTEGER,
                 created_at REAL
             )
         """)
+        # P2 migration: pre-P2 broadcasts tables lack the context column (AHB-1 P2).
+        try:
+            await db.execute("ALTER TABLE broadcasts ADD COLUMN context TEXT")
+        except sqlite3.OperationalError:
+            pass
         await db.execute("CREATE INDEX IF NOT EXISTS idx_broadcasts_sender_created ON broadcasts(sender_id, created_at)")
 
         await db.commit()
@@ -298,11 +305,12 @@ async def broadcast(db_path, sender_id, payload, subject=None, context=None,
                 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, rows)
 
-        # Audit row (also the rate-limit source) — recorded even on a zero-recipient broadcast,
-        # so broadcasting into an empty hub still counts against the caps.
+        # Audit row (also the rate-limit source AND the durable late-joiner catch-up source,
+        # AHB-1 P2) — recorded even on a zero-recipient broadcast, so broadcasting into an
+        # empty hub still counts against the caps and still reaches whoever registers later.
         await db.execute(
-            "INSERT INTO broadcasts (id, sender_id, subject, payload, recipient_count, created_at) VALUES (?, ?, ?, ?, ?, ?)",
-            (broadcast_id, sender_id, subject, payload, len(rows), now),
+            "INSERT INTO broadcasts (id, sender_id, subject, payload, context, recipient_count, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (broadcast_id, sender_id, subject, payload, context, len(rows), now),
         )
         await db.commit()
 
@@ -313,6 +321,54 @@ async def broadcast(db_path, sender_id, payload, subject=None, context=None,
         "skipped_offline": skipped_offline,
         "skipped_over_cap": skipped_over_cap,
     }
+
+@retry_on_lock()
+async def deliver_missed_broadcasts(db_path, agent_id, window=BROADCAST_CATCHUP_WINDOW):
+    """Late-joiner catch-up (AHB-1 P2): queue every broadcast from the last `window` seconds
+    that `agent_id` never received, as normal pending kind='announcement' rows.
+
+    Dedupe is structural, not cursor-based: a P1 fan-out row (and any prior catch-up row)
+    carries session_id = broadcast_id, so "already received" = "a messages row exists for
+    (session_id, recipient_id)" — in ANY status, including claimed/completed/expired. That
+    makes this idempotent across re-registers with no read-cursor column to maintain.
+    Catch-up rows get created_at = now, so the D24 TTL sweep gives them a full fresh life.
+    Returns the number of announcements queued.
+    """
+    now = time.time()
+    async with _connect(db_path) as db:
+        async with db.execute(
+            """
+            SELECT b.id, b.sender_id, b.subject, b.payload, b.context
+            FROM broadcasts b
+            WHERE b.created_at > ?
+              AND NOT EXISTS (
+                  SELECT 1 FROM messages m
+                  WHERE m.session_id = b.id AND m.recipient_id = ?
+              )
+            ORDER BY b.created_at
+            """,
+            (now - window, agent_id),
+        ) as cursor:
+            missed = await cursor.fetchall()
+
+        if missed:
+            await db.executemany("""
+                INSERT INTO messages (
+                    id, session_id, parent_id, kind, sender_id, recipient_id,
+                    payload, context, response, status, flagged_stale, created_at, updated_at, subject
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, [
+                (
+                    str(uuid.uuid4()), b["id"], None, "announcement", b["sender_id"], agent_id,
+                    b["payload"], b["context"], None, "pending",
+                    0,  # the recipient is registering right now — by definition fresh
+                    now, now, b["subject"],
+                )
+                for b in missed
+            ])
+            await db.commit()
+
+    return len(missed)
 
 @retry_on_lock()
 async def claim_pending(db_path, agent_id, visibility_timeout=VISIBILITY_TIMEOUT):

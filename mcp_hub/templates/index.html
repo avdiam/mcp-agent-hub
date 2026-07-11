@@ -141,6 +141,11 @@
                     </div>
                     <div class="h-8 w-px bg-white/10"></div>
                     <div class="flex items-center gap-2">
+                        <button id="btn-broadcast" onclick="openBroadcast()" title="Send an operator announcement to every connected agent (late joiners catch up on register)"
+                            class="flex items-center gap-1.5 text-xs font-medium px-3 py-1.5 rounded-lg bg-white/5 hover:bg-sky-500/15 text-slate-300 hover:text-sky-300 border border-white/10 hover:border-sky-500/30 transition-all">
+                            <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5.882V19.24a1.76 1.76 0 01-3.417.592l-2.147-6.15M18 13a3 3 0 100-6M5.436 13.683A4.001 4.001 0 017 6h1.832c4.1 0 7.625-1.234 9.168-3v14c-1.543-1.766-5.067-3-9.168-3H7a3.988 3.988 0 01-1.564-.317z"></path></svg>
+                            Broadcast
+                        </button>
                         <button id="btn-reset" onclick="doSoftReset()" title="Clear the activity feed and release stuck in-progress messages (no disconnects)"
                             class="flex items-center gap-1.5 text-xs font-medium px-3 py-1.5 rounded-lg bg-white/5 hover:bg-amber-500/15 text-slate-300 hover:text-amber-300 border border-white/10 hover:border-amber-500/30 transition-all">
                             <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"></path></svg>
@@ -310,6 +315,31 @@
     <div id="toast" class="fixed bottom-6 right-6 z-[60] hidden">
         <div class="glass-panel bg-dark-800/95 border border-white/10 rounded-xl px-4 py-3 text-sm text-slate-200 shadow-2xl flex items-center gap-2">
             <span id="toast-msg"></span>
+        </div>
+    </div>
+
+    <!-- Broadcast compose dialog (AHB-1 P2 operator control) -->
+    <div id="broadcast-backdrop" class="fixed inset-0 bg-black/60 backdrop-blur-sm z-[60] hidden items-center justify-center p-4">
+        <div class="glass-panel bg-dark-800/95 w-full max-w-lg rounded-2xl border border-white/15 shadow-2xl p-6 flex flex-col gap-4">
+            <h3 class="text-lg font-semibold text-white flex items-center gap-2">
+                <svg class="w-5 h-5 text-sky-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5.882V19.24a1.76 1.76 0 01-3.417.592l-2.147-6.15M18 13a3 3 0 100-6M5.436 13.683A4.001 4.001 0 017 6h1.832c4.1 0 7.625-1.234 9.168-3v14c-1.543-1.766-5.067-3-9.168-3H7a3.988 3.988 0 01-1.564-.317z"></path></svg>
+                Broadcast announcement
+            </h3>
+            <p class="text-sm text-slate-400">Sent as <span class="font-mono text-slate-300">operator</span> to every connected agent; agents that register within 24h also receive it. Announcements are ack-less and flood-capped.</p>
+            <div class="flex flex-col gap-1">
+                <label for="broadcast-subject" class="text-xs uppercase tracking-wider font-semibold text-slate-500">Subject <span class="normal-case font-normal">(optional, ≤120 chars)</span></label>
+                <input id="broadcast-subject" maxlength="120" placeholder="e.g. Hub maintenance at 18:00"
+                    class="bg-dark-700 text-slate-200 text-sm rounded-lg border border-white/10 px-3 py-2 focus:outline-none focus:border-sky-500/50 placeholder:text-slate-600">
+            </div>
+            <div class="flex flex-col gap-1">
+                <label for="broadcast-payload" class="text-xs uppercase tracking-wider font-semibold text-slate-500">Message <span class="normal-case font-normal">(≤4 KB)</span></label>
+                <textarea id="broadcast-payload" rows="4" placeholder="What every agent should know…"
+                    class="bg-dark-700 text-slate-200 text-sm rounded-lg border border-white/10 px-3 py-2 focus:outline-none focus:border-sky-500/50 placeholder:text-slate-600 resize-y custom-scrollbar"></textarea>
+            </div>
+            <div class="flex justify-end gap-2 mt-2">
+                <button onclick="closeBroadcast()" class="text-sm px-4 py-2 rounded-lg bg-white/5 hover:bg-white/10 text-slate-300 border border-white/10 transition-colors">Cancel</button>
+                <button id="broadcast-send" onclick="doBroadcast()" class="text-sm px-4 py-2 rounded-lg bg-sky-500/20 hover:bg-sky-500/30 text-sky-300 border border-sky-500/30 transition-colors">Send to all</button>
+            </div>
         </div>
     </div>
 
@@ -1069,6 +1099,42 @@
                 fetchState();
             } catch (e) {
                 showToast('Reset failed: ' + e.message);
+            } finally {
+                btn.disabled = false; btn.classList.remove('opacity-50');
+            }
+        }
+
+        function openBroadcast() {
+            const bd = document.getElementById('broadcast-backdrop');
+            bd.classList.remove('hidden'); bd.classList.add('flex');
+            document.getElementById('broadcast-payload').focus();
+        }
+        function closeBroadcast() {
+            const bd = document.getElementById('broadcast-backdrop');
+            bd.classList.add('hidden'); bd.classList.remove('flex');
+        }
+        async function doBroadcast() {
+            const payload = document.getElementById('broadcast-payload').value.trim();
+            const subject = document.getElementById('broadcast-subject').value.trim();
+            if (!payload) { showToast('Broadcast needs a message body.'); return; }
+            const btn = document.getElementById('broadcast-send');
+            btn.disabled = true; btn.classList.add('opacity-50');
+            try {
+                const res = await fetch('/api/broadcast', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ payload, subject: subject || null })
+                });
+                const data = await res.json();
+                if (!res.ok || !data.ok) throw new Error(data.error || ('HTTP ' + res.status));
+                showToast(`Broadcast sent to ${data.delivered} agent(s)` +
+                          (data.skipped_offline ? ` (${data.skipped_offline} offline skipped)` : '') + '.');
+                document.getElementById('broadcast-payload').value = '';
+                document.getElementById('broadcast-subject').value = '';
+                closeBroadcast();
+                fetchState();
+            } catch (e) {
+                showToast('Broadcast failed: ' + e.message);
             } finally {
                 btn.disabled = false; btn.classList.remove('opacity-50');
             }

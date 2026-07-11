@@ -184,6 +184,77 @@ async def test_delete_agent_option_a_keeps_messages(temp_db):
     # Deleting a non-existent agent reports zero rows removed
     assert (await db.delete_agent(temp_db, "ghost"))["agents_deleted"] == 0
 
+@pytest.mark.asyncio
+async def test_catchup_delivers_missed_broadcast(temp_db):
+    # AHB-1 P2: an agent registering AFTER a broadcast still receives it, faithfully
+    # (payload, subject, context, session_id=broadcast_id), as a normal announcement.
+    await db.upsert_agent(temp_db, "sender", "[]")
+    res = await db.broadcast(temp_db, "sender", "hub news", subject="motd", context="ctx")
+
+    await db.upsert_agent(temp_db, "late", "[]")
+    assert await db.deliver_missed_broadcasts(temp_db, "late") == 1
+
+    claimed = await db.claim_pending(temp_db, "late")
+    assert len(claimed) == 1
+    ann = claimed[0]
+    assert ann["kind"] == "announcement"
+    assert ann["payload"] == "hub news"
+    assert ann["subject"] == "motd"
+    assert ann["context"] == "ctx"
+    assert ann["session_id"] == res["broadcast_id"]
+    # Ack-less: auto-completed on claim, no redelivery
+    assert await db.claim_pending(temp_db, "late") == []
+
+@pytest.mark.asyncio
+async def test_catchup_is_idempotent_and_skips_prior_recipients(temp_db):
+    # AHB-1 P2: dedupe is structural (a messages row with session_id=broadcast_id exists),
+    # so neither original recipients nor already-caught-up agents ever get a duplicate.
+    await db.upsert_agent(temp_db, "sender", "[]")
+    await db.upsert_agent(temp_db, "present", "[]")
+    await db.broadcast(temp_db, "sender", "news")
+
+    # 'present' got the P1 fan-out row (even while unclaimed) — catch-up adds nothing
+    assert await db.deliver_missed_broadcasts(temp_db, "present") == 0
+
+    # late joiner: first catch-up delivers, repeat re-registers are no-ops,
+    # including after the delivered row was claimed (auto-completed)
+    await db.upsert_agent(temp_db, "late", "[]")
+    assert await db.deliver_missed_broadcasts(temp_db, "late") == 1
+    assert await db.deliver_missed_broadcasts(temp_db, "late") == 0
+    await db.claim_pending(temp_db, "late")
+    assert await db.deliver_missed_broadcasts(temp_db, "late") == 0
+
+@pytest.mark.asyncio
+async def test_catchup_respects_window(temp_db):
+    # AHB-1 P2: broadcasts older than BROADCAST_CATCHUP_WINDOW are not re-delivered.
+    await db.upsert_agent(temp_db, "sender", "[]")
+    res = await db.broadcast(temp_db, "sender", "old news")
+
+    async with aiosqlite.connect(temp_db) as conn:
+        await conn.execute(
+            "UPDATE broadcasts SET created_at=? WHERE id=?",
+            (time.time() - db.BROADCAST_CATCHUP_WINDOW - 60, res["broadcast_id"]),
+        )
+        await conn.commit()
+
+    await db.upsert_agent(temp_db, "late", "[]")
+    assert await db.deliver_missed_broadcasts(temp_db, "late") == 0
+
+@pytest.mark.asyncio
+async def test_catchup_covers_agent_offline_at_broadcast(temp_db):
+    # AHB-1 P2: an explicitly-offline agent is skipped by the fan-out (BD3) but catches
+    # up when it comes back within the window.
+    await db.upsert_agent(temp_db, "sender", "[]")
+    await db.upsert_agent(temp_db, "sleeper", "[]")
+    await db.set_agent_offline(temp_db, "sleeper")
+
+    await db.broadcast(temp_db, "sender", "while you were out")
+
+    await db.upsert_agent(temp_db, "sleeper", "[]")  # comes back online
+    assert await db.deliver_missed_broadcasts(temp_db, "sleeper") == 1
+    claimed = await db.claim_pending(temp_db, "sleeper")
+    assert [m["payload"] for m in claimed] == ["while you were out"]
+
 def test_derive_status_edge_cases():
     # AHB-15/D34: liveness derives from last_seen age; the stored column only wins for
     # explicit offline.

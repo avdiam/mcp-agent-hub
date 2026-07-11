@@ -164,11 +164,19 @@ async def register_agent(agent_id: str, skills: list[Skill], description: str | 
     Register yourself with the Hub so others can discover and send messages to you.
     Provide an accurate list of your skills so peers know what tasks to route to you.
     You MUST call this before sending or checking messages.
+    Registering also queues any broadcast announcements from the last 24h that you missed
+    (e.g. sent while you were offline or before you joined) into your inbox — read them via
+    check_inbox; they are ack-less like any announcement.
     """
     skills_dict = [s.model_dump() for s in skills]
     skills_json = json.dumps(skills_dict)
     await db.upsert_agent(DB_PATH, agent_id, skills_json, description)
-    return f"Successfully registered agent {agent_id}"
+    # AHB-1 P2: catch the registrant up on broadcasts it missed (late joiner / was offline).
+    missed = await db.deliver_missed_broadcasts(DB_PATH, agent_id)
+    result = f"Successfully registered agent {agent_id}"
+    if missed:
+        result += f" — {missed} missed announcement(s) queued in your inbox; check_inbox to read them"
+    return result
 
 @mcp.tool()
 async def list_agents() -> list[dict]:
@@ -375,3 +383,19 @@ async def api_agents_delete(agent_id: str, purge_messages: bool = False):
 async def api_purge():
     purged = await db.delete_old(DB_PATH)
     return {"ok": True, "deleted": purged}
+
+class BroadcastBody(BaseModel):
+    payload: str = Field(min_length=1)
+    subject: str | None = None
+
+@app.post("/api/broadcast")
+async def api_broadcast(body: BroadcastBody):
+    # Operator announcement from the dashboard (AHB-1 P2). Same db.broadcast path and flood
+    # caps as the MCP tool; the fixed "operator" sender is rate-limited like any agent but
+    # isn't a registered agent, so it gets no self-echo row. Late joiners still receive it
+    # via the register-time catch-up (the broadcasts audit row is the durable source).
+    try:
+        result = await db.broadcast(DB_PATH, "operator", body.payload, subject=body.subject)
+    except ValueError as e:
+        return JSONResponse({"ok": False, "error": str(e)}, status_code=400)
+    return {"ok": True, **result}

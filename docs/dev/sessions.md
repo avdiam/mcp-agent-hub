@@ -2,6 +2,35 @@
 
 > Append-only log of what was accomplished each session. Pairs with `tasks.md` (what's left). This project travels between two PCs and uses **no local Claude memories** — this file is the durable record. Newest session first.
 
+## 2026-07-11 (later 5) — AHB-1 P2 shipped (D35): durable announcements via register-time catch-up
+
+Directed follow-up after the live validation: **build AHB-1 P2**. Design confirmed with the user
+(24h catch-up window; dashboard control included). `pytest` **44/44** (38 → +6).
+
+- **Key insight — P1 already built P2's foundations.** The `broadcasts` audit table (durable,
+  rate-limit source) doubles as the announcement store, and P1 fan-out rows carry
+  `session_id = broadcast_id` — so "did agent X receive broadcast B" is a structural existence
+  check. **No new `announcements` table, no per-agent read cursor** (both were in the original P2
+  sketch); the schema delta is one `context` column on `broadcasts` (try/except `ALTER` migration).
+- **`db.deliver_missed_broadcasts(agent_id, window=BROADCAST_CATCHUP_WINDOW=24h)`** — called by
+  `register_agent` after the upsert: queues every in-window broadcast with no existing message row
+  for this agent as fresh pending `kind="announcement"` rows (`created_at=now` → full D24 sweep
+  life; original broadcast's session id → threads with its siblings). Idempotent across
+  re-registers (an existing row in ANY status — claimed/completed/expired — blocks re-delivery);
+  covers agents explicitly offline at broadcast time (BD3 skip). Register's return string notes
+  the queued count. Late joiners need **zero new client behavior** — delivery rides the existing
+  inbox/long-poll/nudge/ack-less pipeline; tool count stays 10 (no `get_announcements`).
+- **Dashboard Broadcast control:** `POST /api/broadcast` (`{payload, subject?}`) sends as the fixed
+  unregistered sender **`operator`** through the same capped `db.broadcast` path (no self-echo;
+  cap violation → clean 400 `{ok: false, error}`), plus a toolbar **Broadcast** button + sky-styled
+  compose modal (subject ≤120, payload ≤4KB) wired to it with toast feedback.
+- **Tests (6 new):** catch-up delivers faithfully (payload/subject/context/session_id, ack-less);
+  structural dedupe (prior recipients, repeat re-registers, post-claim); window respected;
+  offline-at-broadcast covered; register catch-up end-to-end at the MCP layer; `/api/broadcast`
+  happy path + cooldown-400.
+- **Docs:** D35 (+ footer), `agent-hub-issues.md` (AHB-1 → fixed, "P2 as shipped"), `specs.md`
+  (tools #1/#4, `broadcasts` schema), `architecture.md` (db helper + route), `AGENTS.md`.
+
 ## 2026-07-11 (later 4) — Live validation with `wiki-forge` (3/3) + AHB-15 found & fixed (D34)
 
 First real-use validation of today's ships, run as a live hub exchange with `wiki-forge`

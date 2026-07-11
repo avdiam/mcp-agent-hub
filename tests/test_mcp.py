@@ -144,6 +144,55 @@ async def test_mcp_tool_roundtrip():
     assert status["response"] == "done"
 
 @pytest.mark.asyncio
+async def test_register_agent_catches_up_missed_broadcasts():
+    # AHB-1 P2 end-to-end: broadcast → late joiner registers → announcement lands in its
+    # inbox via the normal check_inbox path; re-registering never re-delivers.
+    await register_agent("announcer", [], "sender")
+    await broadcast_message("announcer", "hub-wide news", subject="motd")
+
+    res = await register_agent("late_joiner", [], "joined after the broadcast")
+    assert "1 missed announcement" in res
+
+    inbox = await check_inbox("late_joiner", wait=False)
+    assert [m["kind"] for m in inbox] == ["announcement"]
+    assert inbox[0]["payload"] == "hub-wide news"
+    assert inbox[0]["subject"] == "motd"
+
+    res2 = await register_agent("late_joiner", [], "re-register")
+    assert "missed announcement" not in res2
+    assert await check_inbox("late_joiner", wait=False) == []
+
+@pytest.mark.asyncio
+async def test_api_broadcast(test_client):
+    # AHB-1 P2 dashboard control: POST /api/broadcast sends as "operator" through the same
+    # capped db.broadcast path; a cap violation returns a clean 400.
+    await register_agent("listener", [], "hears operator broadcasts")
+
+    res = await test_client.post(
+        "/api/broadcast",
+        json={"payload": "maintenance at 18:00", "subject": "ops"},
+        headers={"Origin": "http://localhost"},
+    )
+    assert res.status_code == 200
+    data = res.json()
+    assert data["ok"] is True
+    assert data["delivered"] == 1  # only 'listener'; 'operator' isn't registered → no echo
+
+    inbox = await check_inbox("listener", wait=False)
+    assert len(inbox) == 1
+    assert inbox[0]["kind"] == "announcement"
+    assert inbox[0]["sender_id"] == "operator"
+
+    # Immediate second operator broadcast trips the per-sender cooldown → clean 400
+    res2 = await test_client.post(
+        "/api/broadcast",
+        json={"payload": "again too soon"},
+        headers={"Origin": "http://localhost"},
+    )
+    assert res2.status_code == 400
+    assert res2.json()["ok"] is False
+
+@pytest.mark.asyncio
 async def test_list_agents_status_is_liveness_derived(test_client):
     # AHB-15/D34: the MCP tool must not report the stored sticky 'online' for a
     # long-idle agent; list_agents and /api/state share one derivation and cannot diverge.
