@@ -24,7 +24,7 @@
 | AHB-10 | open | No canonical distribution channel — peers re-vendor by manual hub-paste (needs published remote) | nexus (peer) | 2026-06-20 |
 | AHB-11 | fixed | Result / `input_request` fan-out crashes when the original sender is offline / unknown / deleted | eval (avdia-req) | 2026-07-11 |
 | AHB-12 | fixed | Duplicate/late `input_request` reply revives an already-completed parent task | eval (avdia-req) | 2026-07-11 |
-| AHB-13 | open | Task failure / clarification-abandonment not surfaced to the sender's live inbox loop | eval (avdia-req) | 2026-07-11 |
+| AHB-13 | fixed | Task failure / clarification-abandonment not surfaced to the sender's live inbox loop | eval (avdia-req) | 2026-07-11 |
 | AHB-14 | open | Minor hardening pass: duplicated magic constants + activity-feed actor attribution | eval (avdia-req) | 2026-07-11 |
 
 ---
@@ -680,12 +680,22 @@ own at-least-once guarantee.
 
 ## AHB-13 — Task failure / clarification-abandonment not surfaced to the sender's live inbox loop
 
-- **Status:** open — scoped 2026-07-11, **not built**. Two related visibility gaps in the
-  agent-to-agent protocol; both leave a sender's live `check_inbox` loop waiting with no signal.
+- **Status:** ✅ **fixed (2026-07-11) via D31.** Both gaps closed in `db.fail_message`:
+  **#3** — failing a `task` now fans out a **`kind="failure"`** message to the original sender
+  (mirror of the D20 result fan-out; internal + ack-less, survives an offline/unknown sender per
+  D30/AHB-11). **#4** — failing an `input_request` now returns the parked parent to **`pending`**
+  with `[Clarification Failed]: <error>` noted in `context` (handed back to the worker, not
+  stranded), idempotent on the same `status='input_required'` gate as AHB-12. Ack-less handling
+  generalized to **`NO_ACK_KINDS = ("result", "failure")`** in `claim_pending`. Dashboard badges
+  the new kind (red **FAILURE**); tool docstrings, `SKILL.md`, `specs.md`, `design-decisions.md`
+  (D31), and `AGENTS.md` updated. 4 regression tests added (`test_fail_task_notifies_sender`,
+  `test_fail_notification_survives_offline_sender`, `test_fail_input_request_returns_parent_to_pending`,
+  `test_fail_input_request_unpark_is_idempotent`); `pytest` **23/23**.
 - **Reporter:** self-eval (requested by avdia, 2026-07-11).
 - **Relates to:** D20 (the "results reach you via your inbox, no status-polling needed" contract),
   D24 (TTL sweep targets `pending kind='task'` only), the v2 **cascade-expire parked tasks** item
-  in `tasks.md`, and the `agent-hub-live` SKILL loop (which never falls back to `check_status`).
+  in `tasks.md`, AHB-1 **BD2** (`NO_ACK_KINDS` pre-satisfied for the coming `announcement` kind),
+  and the `agent-hub-live` SKILL loop (which never falls back to `check_status`).
 
 ### Problem (both confirmed against a scratch DB)
 1. **Failure is invisible to the sender (#3).** `fail_message` sets the task `failed` but **fans out
@@ -701,20 +711,25 @@ own at-least-once guarantee.
    even after the TTL sweep. This is the known v2 *cascade-expire* gap, but the **explicit-fail** path
    (not just silent abandonment) makes it more reachable than the v2 note framed it.
 
-### Proposed fix (to scope)
-- **#3:** on `fail_message` of a `task`, fan out a failure notification to the sender — either a
-  `kind="result"` carrying the error (simplest; the live loop already treats `result` as ack-less and
-  surfaces it), or a distinct `kind` / a `failed` flag on the result so the sender can tell success
-  from failure. Decide whether a `request_input` failure should notify the *worker* symmetrically.
-- **#4:** when an `input_request` is **failed** (as opposed to answered), decide the parent's fate —
-  fail the parent, or return it to `pending` with the failure noted in `context` so the worker can
-  proceed/abort — rather than leaving it parked forever. This overlaps the v2 cascade-expire design;
-  fold the two together.
+### Fix as shipped (decisions taken)
+- **#3:** chose a **distinct `kind="failure"`** (not a reused `kind="result"` + flag) — self-documenting,
+  lets the dashboard badge it, and avoids a schema `failed` column. It reuses `result`'s ack-less slot by
+  joining a new **`NO_ACK_KINDS = ("result", "failure")`** set in `claim_pending` (auto-complete on claim).
+  A `request_input` failure does **not** symmetrically notify the worker — instead #4 hands the worker its
+  task back directly (below), which is a stronger signal than a notification.
+- **#4:** a failed `input_request` **returns the parent to `pending`** with the refusal noted in `context`
+  (not auto-**fail** the parent). Rationale: the worker owns the task's execution, so it re-claims, sees the
+  refusal, and decides to proceed best-effort or `fail_message` the task itself (which then notifies the
+  sender via #3). Reuses the D30 un-park machinery with the same idempotent `status='input_required'` gate.
+  Closes the *explicit-fail* slice of the v2 cascade-expire gap; only *silent* abandonment of a parked
+  parent remains for v2.
 
 ### Notes
-- Ties into the D20 contract wording — if fixed, update `SKILL.md`/`SETUP.md` "no status-polling
-  needed" to cover failures, and `specs.md` D20/`fail_message`.
-- Effort: small–medium. Get the `#3` happy-path + a redelivery/idempotency test green first.
+- Updated the D20 contract wording across `SKILL.md` (new `failure` handling + failed-`input_request`
+  note) and `specs.md` (`fail_message`, D20/D31 delivery, kind enum). `SETUP.md` needed no change.
+- Graceful degradation: a peer on the **old** `SKILL.md` treats `failure` as an unrecognized ack-less
+  kind (read + surface, don't ack) and the hub auto-completes it — so no re-vendor is required for
+  correctness, only for the nicer "your task failed" wording.
 
 ---
 

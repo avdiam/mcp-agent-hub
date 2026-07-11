@@ -299,3 +299,96 @@ async def test_duplicate_input_reply_does_not_revive_completed_parent(temp_db):
     # Duplicate reply to the SAME input_request must NOT revive the completed parent.
     await db.complete_message(temp_db, rid, "answer again")
     assert (await db.get_status(temp_db, tid))["status"] == "completed"
+
+@pytest.mark.asyncio
+async def test_fail_task_notifies_sender(temp_db):
+    # AHB-13 #3: failing a task must surface a 'failure' message to the sender's inbox
+    # (the mirror of the 'result' fan-out on success), so a live check_inbox loop gets a
+    # signal instead of waiting to its idle cap.
+    await db.upsert_agent(temp_db, "requester", "[]")
+    await db.upsert_agent(temp_db, "worker", "[]")
+    task = await db.enqueue_message(temp_db, "requester", "worker", "do work")
+    await db.claim_pending(temp_db, "worker")
+
+    await db.fail_message(temp_db, task["message_id"], "ran out of budget")
+    assert (await db.get_status(temp_db, task["message_id"]))["status"] == "failed"
+
+    # The sender receives a kind='failure' carrying the error...
+    fail_claimed = await db.claim_pending(temp_db, "requester")
+    assert len(fail_claimed) == 1
+    assert fail_claimed[0]["kind"] == "failure"
+    assert fail_claimed[0]["response"] == "ran out of budget"
+    assert fail_claimed[0]["parent_id"] == task["message_id"]
+
+    # ...and it is ack-less: auto-completed on claim, so it isn't redelivered.
+    async with aiosqlite.connect(temp_db) as conn:
+        async with conn.execute("SELECT status FROM messages WHERE id=?", (fail_claimed[0]["id"],)) as cursor:
+            assert (await cursor.fetchone())[0] == "completed"
+    assert await db.claim_pending(temp_db, "requester") == []
+
+@pytest.mark.asyncio
+async def test_fail_notification_survives_offline_sender(temp_db):
+    # AHB-13 #3 + AHB-11: the failure fan-out is an internal delivery, so it must not raise
+    # even if the original sender has gone offline.
+    await db.upsert_agent(temp_db, "requester", "[]")
+    await db.upsert_agent(temp_db, "worker", "[]")
+    task = await db.enqueue_message(temp_db, "requester", "worker", "do work")
+    await db.claim_pending(temp_db, "worker")
+    await db.set_agent_offline(temp_db, "requester")
+
+    await db.fail_message(temp_db, task["message_id"], "nope")  # must not raise
+    async with aiosqlite.connect(temp_db) as conn:
+        async with conn.execute(
+            "SELECT response FROM messages WHERE recipient_id='requester' AND kind='failure'"
+        ) as cursor:
+            row = await cursor.fetchone()
+            assert row is not None and row[0] == "nope"
+
+@pytest.mark.asyncio
+async def test_fail_input_request_returns_parent_to_pending(temp_db):
+    # AHB-13 #4: if the sender fails (can't answer) a clarification, the parent task must be
+    # handed back to the worker as pending with the refusal noted — not stranded in
+    # input_required forever (the TTL sweep never touches it there).
+    await db.upsert_agent(temp_db, "requester", "[]")
+    await db.upsert_agent(temp_db, "worker", "[]")
+    task = await db.enqueue_message(temp_db, "requester", "worker", "do work")
+    tid = task["message_id"]
+    await db.claim_pending(temp_db, "worker")
+    req = await db.request_input(temp_db, tid, "which color?")
+    await db.claim_pending(temp_db, "requester")
+
+    # Sender fails the clarification instead of answering it.
+    await db.fail_message(temp_db, req["request_message_id"], "I don't know either")
+
+    # Parent is pending again and re-claimable by the worker, with the failure in context.
+    assert (await db.get_status(temp_db, tid))["status"] == "pending"
+    worker_claimed = await db.claim_pending(temp_db, "worker")
+    assert len(worker_claimed) == 1
+    assert worker_claimed[0]["id"] == tid
+    assert "Clarification Failed" in worker_claimed[0]["context"]
+
+    # Failing an input_request does NOT itself fan out a task-failure to the sender.
+    async with aiosqlite.connect(temp_db) as conn:
+        async with conn.execute("SELECT COUNT(*) FROM messages WHERE kind='failure'") as cursor:
+            assert (await cursor.fetchone())[0] == 0
+
+@pytest.mark.asyncio
+async def test_fail_input_request_unpark_is_idempotent(temp_db):
+    # AHB-13 #4 (mirror of AHB-12): a duplicate/late fail of the same clarification must not
+    # revive a parent that has already moved on.
+    await db.upsert_agent(temp_db, "requester", "[]")
+    await db.upsert_agent(temp_db, "worker", "[]")
+    task = await db.enqueue_message(temp_db, "requester", "worker", "do work")
+    tid = task["message_id"]
+    await db.claim_pending(temp_db, "worker")
+    req = await db.request_input(temp_db, tid, "which?")
+    rid = req["request_message_id"]
+    await db.claim_pending(temp_db, "requester")
+    await db.fail_message(temp_db, rid, "can't answer")   # first fail un-parks parent
+    await db.claim_pending(temp_db, "worker")             # worker reclaims parent
+    await db.complete_message(temp_db, tid, "did my best")  # worker completes it
+    assert (await db.get_status(temp_db, tid))["status"] == "completed"
+
+    # Duplicate fail of the SAME clarification must NOT reopen the completed parent.
+    await db.fail_message(temp_db, rid, "still can't")
+    assert (await db.get_status(temp_db, tid))["status"] == "completed"

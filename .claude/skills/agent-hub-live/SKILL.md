@@ -56,10 +56,16 @@ Repeat until a stop condition (below). Each iteration:
      message changed" reaches you — no separate polling needed. Incorporate the result
      and tell the user. **Ack-less** — the hub auto-completes it on claim; do NOT
      `reply`/`fail`.
+   - **`failure`** (a task YOU sent has FAILED): the mirror of `result` — the worker
+     couldn't complete it; the error is in `response`. Same handling: incorporate it,
+     tell the user, decide whether to retry/re-route. **Ack-less** — do NOT `reply`/`fail`.
    - **`input_request`** (a peer needs clarification on a task you sent them): answer
-     with `reply_to_message(message_id, answer)`.
+     with `reply_to_message(message_id, answer)`. If you genuinely can't answer,
+     `fail_message(message_id, error)` — the hub hands the peer's task back to them (as
+     pending, with your refusal noted) rather than leaving it parked forever.
    - If you cannot complete a `task`, `fail_message(message_id, error)` to ack with a
-     reason instead of leaving it stuck.
+     reason instead of leaving it stuck — the original sender is notified via a `failure`
+     message in their inbox (no polling needed on their side).
    - **Any other / unrecognized `kind`** (e.g. a future ack-less kind such as
      `announcement`): treat it as **informational and ack-less** — read it, surface it
      to the user, and continue. Do **not** `reply_to_message`/`fail_message` on it: the
@@ -97,9 +103,9 @@ must honor the stop token, or they will talk until a budget runs out.
 
 ## Conventions
 - **Ack `task`/`input_request` only** (`reply_to_message` or `fail_message`) — unacked
-  = redelivered = duplicate work. **Never ack ack-less kinds** (`result`, `announcement`,
-  or any unrecognized kind): the hub auto-completes them on claim, and replying would emit
-  a spurious `result` to the sender.
+  = redelivered = duplicate work. **Never ack ack-less kinds** (`result`, `failure`,
+  `announcement`, or any unrecognized kind): the hub auto-completes them on claim, and
+  replying would emit a spurious `result` to the sender.
 - Keep replies concise and on-task; you are talking to another agent, not a human.
 - Keep the user informed: say when you're waiting vs. acting, and surface anything that
   needs their decision via `request_input` rather than guessing.

@@ -176,7 +176,7 @@ async def send_message(sender_id: str, recipient_id: str, payload: str, context:
 @mcp.tool()
 async def check_inbox(agent_id: str, wait: bool = True, timeout: int = 30) -> list[dict]:
     """
-    Check your inbox for new tasks, clarification requests, or task results.
+    Check your inbox for new tasks, clarification requests, task results, or task failures.
     By default (wait=True), this blocks and waits up to `timeout` seconds for a message to arrive.
     It is highly recommended to call this in a loop to wait for work.
     Returns a list of messages. Claimed messages MUST be acknowledged with reply_to_message or fail_message!
@@ -204,6 +204,11 @@ async def reply_to_message(message_id: str, response: str) -> str:
 async def fail_message(message_id: str, error: str) -> str:
     """
     Mark a claimed message as failed with an error description.
+    If the message was a task, the original sender is notified via a 'failure' message in
+    their inbox (the mirror of the 'result' they'd get on success — no status polling needed).
+    If the message was a clarification question (input_request) you couldn't answer, the
+    original task is handed back to its worker (as pending) with your failure noted, rather
+    than left parked forever.
     """
     await db.fail_message(DB_PATH, message_id, error)
     return f"Message {message_id} failed."

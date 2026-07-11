@@ -2,6 +2,44 @@
 
 > Append-only log of what was accomplished each session. Pairs with `tasks.md` (what's left). This project travels between two PCs and uses **no local Claude memories** — this file is the durable record. Newest session first.
 
+## 2026-07-11 (later) — AHB-13 fixed (D31): failure surfacing + failed-clarification un-park
+
+Directed follow-up to the eval: **build AHB-13**. Both agent-to-agent visibility gaps closed in
+`db.fail_message`, mirroring the existing D20/D30 success paths. `pytest` **23/23** (19 → +4).
+
+- **#3 — task failure now reaches the sender's live inbox.** `fail_message` on a `task` fans out a
+  new **`kind="failure"`** message (carrying the error) to the original sender — the mirror of the
+  D20 result fan-out. Previously `fail_message` fanned out **nothing**, so a peer long-polling
+  `check_inbox` (the SKILL loop never falls back to `check_status`) waited to its idle cap with no
+  signal, silently breaking the D20 "results reach you via your inbox — no polling needed" contract
+  for the failure case. The failure notification is **internal** (`enqueue_message(internal=True)`, so
+  it survives an offline/unknown/departed sender per D30/AHB-11) and **ack-less**: I generalized
+  `claim_pending`'s result auto-complete from `kind=="result"` to a **`NO_ACK_KINDS = ("result",
+  "failure")`** set (this also pre-satisfies AHB-1 **BD2**, which wanted `announcement` in that set).
+- **#4 — failing a clarification no longer strands the parent forever.** If the sender `fail_message`s
+  an `input_request` (SKILL explicitly permits "if you can't complete a task, fail_message"), the
+  parked parent was left `input_required` forever — the D24 TTL sweep only touches `pending
+  kind='task'`. Now `fail_message` on an `input_request` **returns the parent to `pending`** with
+  `[Clarification Failed]: <error>` appended to `context`, handing it back to the **worker** (which
+  owns execution) to proceed best-effort or fail the task itself. Reuses the D30 un-park with the same
+  idempotent `status='input_required'` gate (a duplicate/late fail is a no-op). Chose return-to-pending
+  over auto-**fail**-the-parent so the worker stays in control and isn't left silently parked.
+- **Dashboard:** added a red **FAILURE** kind badge + "Task failed" title — without it, the
+  `getKindBadge` `default` branch mislabeled `failure` as **TASK**.
+- **Design choice:** distinct `kind="failure"` over reusing `kind="result"` + a flag — self-documenting,
+  dashboard-badgeable, no schema `failed` column. Graceful degradation: a peer on the **old** `SKILL.md`
+  treats `failure` as an unrecognized ack-less kind (read + surface, don't ack) and the hub
+  auto-completes it, so **no re-vendor is required for correctness** — only for the nicer wording.
+- **Tests (4 new, `tests/test_db.py`):** `test_fail_task_notifies_sender` (failure delivered + ack-less),
+  `test_fail_notification_survives_offline_sender` (internal bypass), 
+  `test_fail_input_request_returns_parent_to_pending` (parent → pending w/ note; no spurious
+  task-failure fan-out), `test_fail_input_request_unpark_is_idempotent` (duplicate fail can't revive a
+  completed parent). Also re-probed end-to-end against a scratch DB.
+- **Docs:** **D31** in `design-decisions.md` (+ D24 note that the explicit-fail slice is now closed);
+  `specs.md` (`fail_message`, D20/D31 delivery, kind enum, atomic-claim `NO_ACK_KINDS`); `AGENTS.md`
+  delivery bullet; `SKILL.md` (`failure` handling + failed-`input_request` note + ack-less list);
+  `fail_message`/`check_inbox` tool docstrings; `agent-hub-issues.md` AHB-13 → **fixed**.
+
 ## 2026-07-11 — Full-project eval → AHB-11 + AHB-12 fixed (D30); AHB-13/14 logged
 
 avdia-requested full evaluation of the project (MCP server, db logic, dashboard, scripts, tests,

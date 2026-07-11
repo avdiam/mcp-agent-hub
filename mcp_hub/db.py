@@ -10,6 +10,14 @@ import uuid
 if sqlite3.sqlite_version_info < (3, 35):
     raise RuntimeError(f"SQLite >= 3.35 is required. Found: {sqlite3.sqlite_version}")
 
+# Kinds that auto-complete the instant they are claimed (ack-less): the recipient never
+# reply/fail's them, so claim_pending marks them 'completed' on the way out. These are the
+# hub-generated fan-outs that report the fate of a task YOU sent:
+#   result  = the task succeeded (D20)
+#   failure = the task failed     (AHB-13 #3)
+# AHB-1's announcement kind will join this set when broadcast lands.
+NO_ACK_KINDS = ("result", "failure")
+
 
 
 def retry_on_lock(retries=5, backoff=0.01):
@@ -195,10 +203,10 @@ async def claim_pending(db_path, agent_id, visibility_timeout=600):
             rows = await cursor.fetchall()
             claimed = [dict(r) for r in rows]
             
-        result_ids = [r["id"] for r in claimed if r["kind"] == "result"]
-        if result_ids:
-            placeholders = ",".join("?" for _ in result_ids)
-            await db.execute(f"UPDATE messages SET status='completed' WHERE id IN ({placeholders})", result_ids)
+        noack_ids = [r["id"] for r in claimed if r["kind"] in NO_ACK_KINDS]
+        if noack_ids:
+            placeholders = ",".join("?" for _ in noack_ids)
+            await db.execute(f"UPDATE messages SET status='completed' WHERE id IN ({placeholders})", noack_ids)
             
         await db.commit()
         return claimed
@@ -292,11 +300,46 @@ async def complete_message(db_path, message_id, response):
 @retry_on_lock()
 async def fail_message(db_path, message_id, error):
     async with _connect(db_path) as db:
+        async with db.execute("SELECT session_id, parent_id, kind, sender_id, recipient_id FROM messages WHERE id=?", (message_id,)) as cursor:
+            row = await cursor.fetchone()
+            if not row:
+                raise ValueError("Message not found")
+
         now = time.time()
-        cursor = await db.execute("UPDATE messages SET status='failed', response=?, updated_at=? WHERE id=?", (error, now, message_id))
-        if cursor.rowcount == 0:
-            raise ValueError("Message not found")
+        await db.execute("UPDATE messages SET status='failed', response=?, updated_at=? WHERE id=?", (error, now, message_id))
+
+        if row["kind"] == "input_request" and row["parent_id"]:
+            # Failing a clarification (the sender can't/won't answer) must NOT strand the
+            # parent in input_required forever — the TTL sweep only touches pending kind='task'
+            # (D24). Hand the parent back to the worker as pending, with the refusal noted in
+            # context, so the worker re-claims it and decides whether to proceed best-effort or
+            # fail the task itself. Symmetric to complete_message's un-park, and idempotent:
+            # only if the parent is still parked (a duplicate/late fail is a no-op). (AHB-13 #4)
+            async with db.execute("SELECT status, context FROM messages WHERE id=?", (row["parent_id"],)) as cursor:
+                parent = await cursor.fetchone()
+            if parent and parent["status"] == "input_required":
+                new_context = (parent["context"] or "") + f"\n[Clarification Failed]: {error}"
+                await db.execute("UPDATE messages SET status='pending', claimed_at=NULL, context=?, updated_at=? WHERE id=?", (new_context, now, row["parent_id"]))
+
         await db.commit()
+
+    if row["kind"] == "task":
+        # Failure fan-out (mirror of the D20 result fan-out for success): surface the task's
+        # terminal failure to the sender's live inbox so a peer long-polling check_inbox gets a
+        # signal instead of waiting to its idle cap — the live loop never falls back to
+        # check_status. Ack-less kind='failure' (auto-completed on claim, NO_ACK_KINDS);
+        # internal=True so it survives an offline/unknown/departed sender (D30/AHB-11). (AHB-13 #3)
+        await enqueue_message(
+            db_path,
+            sender_id=row["recipient_id"],
+            recipient_id=row["sender_id"],
+            payload="",
+            response=error,
+            session_id=row["session_id"],
+            parent_id=message_id,
+            kind="failure",
+            internal=True,
+        )
 
 @retry_on_lock()
 async def get_status(db_path, message_id):
