@@ -15,7 +15,9 @@ if sqlite3.sqlite_version_info < (3, 35):
 #   result       = a task YOU sent succeeded (D20)
 #   failure      = a task YOU sent failed    (AHB-13 #3)
 #   announcement = a broadcast delivered to everyone (AHB-1 BD2 — informational, no reply)
-NO_ACK_KINDS = ("result", "failure", "announcement")
+#   offer_update = a job-board state change that concerns you (AHB-2 — the offer row is the
+#                  source of truth, so a missed notification never strands anything)
+NO_ACK_KINDS = ("result", "failure", "announcement", "offer_update")
 
 # Tunable queue constants — the single source of truth. hub.py imports these (rather than
 # redefining them) so tuning one here can't silently desync the DB logic from the server
@@ -33,6 +35,19 @@ BROADCAST_MIN_INTERVAL = 30     # seconds — per-sender cooldown between broadc
 BROADCAST_HOURLY_CAP = 10       # broadcasts per sender per rolling hour
 BROADCAST_MAX_RECIPIENTS = 200  # safety ceiling on fan-out size per broadcast
 BROADCAST_CATCHUP_WINDOW = 86400  # seconds a broadcast stays deliverable to late joiners (AHB-1 P2)
+
+# Job-offer board caps (AHB-2). Same philosophy as the broadcast caps: enforced inside the
+# db functions so the DB stays the single source of truth; a violation raises ValueError and
+# inserts NOTHING. Posting an offer also broadcasts an advert under the poster's own
+# broadcast flood caps, so those apply on top of these.
+OFFER_MAX_PAYLOAD = 4096       # bytes (UTF-8) — max offer body (the full work description)
+OFFER_MAX_SUBJECT = 120        # characters — max offer subject
+OFFER_MAX_NOTE = 1024          # bytes (UTF-8) — max claim note
+OFFER_MAX_OPEN_PER_POSTER = 5  # open offers one poster may have on the board at once
+OFFER_DEFAULT_TTL = 86400      # seconds an offer stays open before the sweep expires it (24h)
+OFFER_MIN_TTL = 60             # floor for a caller-supplied TTL
+OFFER_MAX_TTL = 259200         # ceiling for a caller-supplied TTL (72h)
+OFFER_ANNOUNCE_SNIPPET = 500   # characters of the offer body quoted in the advert broadcast
 
 
 
@@ -129,6 +144,46 @@ async def init_db(db_path="hub.db"):
             pass
         await db.execute("CREATE INDEX IF NOT EXISTS idx_broadcasts_sender_created ON broadcasts(sender_id, created_at)")
 
+        # Job-offer board (AHB-2): claimable work items with a lifecycle
+        # (open → assigned | withdrawn | expired, re-opened on assignment failure).
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS job_offers (
+                id TEXT PRIMARY KEY,
+                poster_id TEXT,
+                subject TEXT,
+                payload TEXT,
+                required_skills TEXT,
+                status TEXT DEFAULT 'open',
+                claimant_id TEXT,
+                task_message_id TEXT,
+                broadcast_id TEXT,
+                created_at REAL,
+                updated_at REAL,
+                expires_at REAL
+            )
+        """)
+        await db.execute("CREATE INDEX IF NOT EXISTS idx_offers_status ON job_offers(status)")
+
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS job_claims (
+                id TEXT PRIMARY KEY,
+                offer_id TEXT,
+                claimant_id TEXT,
+                note TEXT,
+                status TEXT DEFAULT 'pending',
+                created_at REAL,
+                updated_at REAL
+            )
+        """)
+        # One PENDING claim per (offer, claimant) — a partial unique index rather than a table
+        # UNIQUE, so an agent whose claim was rejected (or whose assignment failed and
+        # re-opened the offer) may claim again later.
+        await db.execute("""
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_claims_pending_unique
+            ON job_claims(offer_id, claimant_id) WHERE status='pending'
+        """)
+        await db.execute("CREATE INDEX IF NOT EXISTS idx_claims_offer ON job_claims(offer_id)")
+
         await db.commit()
 
 @retry_on_lock()
@@ -182,20 +237,30 @@ async def delete_agent(db_path, agent_id, purge_messages=False):
 
     Option A (default): deletes the agent row only; its historical messages are
     left intact. Option B (purge_messages=True): also deletes every message the
-    agent sent or received. Returns a dict with the rows removed from each table.
+    agent sent or received, plus its job-board footprint (offers it posted — and
+    their claims — and claims it made on others' offers; AHB-2). Returns a dict
+    with the rows removed from each table.
     """
     async with _connect(db_path) as db:
         messages_deleted = 0
+        offers_deleted = 0
         if purge_messages:
             cursor = await db.execute(
                 "DELETE FROM messages WHERE sender_id=? OR recipient_id=?",
                 (agent_id, agent_id),
             )
             messages_deleted = cursor.rowcount
+            await db.execute(
+                "DELETE FROM job_claims WHERE claimant_id=? OR offer_id IN (SELECT id FROM job_offers WHERE poster_id=?)",
+                (agent_id, agent_id),
+            )
+            cursor = await db.execute("DELETE FROM job_offers WHERE poster_id=?", (agent_id,))
+            offers_deleted = cursor.rowcount
         cursor = await db.execute("DELETE FROM agents WHERE id=?", (agent_id,))
         agents_deleted = cursor.rowcount
         await db.commit()
-        return {"agents_deleted": agents_deleted, "messages_deleted": messages_deleted}
+        return {"agents_deleted": agents_deleted, "messages_deleted": messages_deleted,
+                "offers_deleted": offers_deleted}
 
 @retry_on_lock()
 async def touch_last_seen(db_path, agent_id):
@@ -371,6 +436,332 @@ async def deliver_missed_broadcasts(db_path, agent_id, window=BROADCAST_CATCHUP_
     return len(missed)
 
 @retry_on_lock()
+async def post_offer(db_path, poster_id, payload, subject=None, required_skills=None,
+                     ttl=OFFER_DEFAULT_TTL, max_payload=OFFER_MAX_PAYLOAD,
+                     max_subject=OFFER_MAX_SUBJECT, max_open=OFFER_MAX_OPEN_PER_POSTER):
+    """Post a job offer to the board (AHB-2): work open for ANY agent to claim, not
+    addressed to a specific recipient.
+
+    Validates the offer caps, announces the offer through db.broadcast (the poster's own
+    broadcast flood caps apply — posting an offer IS a broadcast, so offer spam and
+    broadcast spam share one budget), then inserts the board row. Any cap violation raises
+    ValueError and posts nothing. The advert carries a snippet + claim instructions; the
+    board row holds the full payload — the advert is the ad, the row is the contract.
+    Returns {"offer_id", "expires_at", "broadcast": {...}}.
+    """
+    if payload is None or not payload.strip():
+        raise ValueError("Offer payload must not be empty")
+    if len(payload.encode("utf-8")) > max_payload:
+        raise ValueError(f"Offer payload exceeds the {max_payload}-byte limit")
+    if subject is not None and len(subject) > max_subject:
+        raise ValueError(f"Offer subject exceeds the {max_subject}-character limit")
+    ttl = max(OFFER_MIN_TTL, min(int(ttl), OFFER_MAX_TTL))
+    skills_list = list(required_skills or [])
+
+    async with _connect(db_path) as db:
+        async with db.execute("SELECT 1 FROM agents WHERE id=?", (poster_id,)) as cursor:
+            if not await cursor.fetchone():
+                raise ValueError(f"Poster {poster_id} is not a registered agent")
+        async with db.execute(
+            "SELECT COUNT(*) AS n FROM job_offers WHERE poster_id=? AND status='open'",
+            (poster_id,),
+        ) as cursor:
+            row = await cursor.fetchone()
+        if row["n"] >= max_open:
+            raise ValueError(
+                f"Open-offer cap reached ({max_open} per poster) — resolve or withdraw one first"
+            )
+
+    offer_id = str(uuid.uuid4())
+    snippet = payload if len(payload) <= OFFER_ANNOUNCE_SNIPPET else payload[:OFFER_ANNOUNCE_SNIPPET] + "…"
+    announce = (
+        f"Job offer {offer_id} from {poster_id}"
+        + (f"\nRequired skills: {', '.join(skills_list)}" if skills_list else "")
+        + f"\n\n{snippet}\n\n"
+        + f"To claim it: claim_offer(agent_id=<you>, offer_id='{offer_id}'). "
+        + "Browse the board with list_offers()."
+    )
+    # Broadcast first: if the poster's flood caps reject it, no offer row exists either
+    # (all-or-nothing from the caller's view). context carries a machine-parseable tag.
+    bcast = await broadcast(
+        db_path, poster_id, announce,
+        subject=(f"[job] {subject}" if subject else "[job] New offer")[:max_subject],
+        context=f"job_offer:{offer_id}",
+    )
+
+    now = time.time()
+    async with _connect(db_path) as db:
+        await db.execute("""
+            INSERT INTO job_offers (id, poster_id, subject, payload, required_skills, status,
+                                    broadcast_id, created_at, updated_at, expires_at)
+            VALUES (?, ?, ?, ?, ?, 'open', ?, ?, ?, ?)
+        """, (offer_id, poster_id, subject, payload, json.dumps(skills_list),
+              bcast["broadcast_id"], now, now, now + ttl))
+        await db.commit()
+
+    return {"offer_id": offer_id, "expires_at": now + ttl, "broadcast": bcast}
+
+@retry_on_lock()
+async def claim_offer(db_path, agent_id, offer_id, note=None, max_note=OFFER_MAX_NOTE):
+    """Express intent to take an open offer (AHB-2). Claims accumulate — there is no
+    enforced claim window; the poster picks one with resolve_offer whenever ready, bounded
+    by the offer TTL. The poster is notified via an ack-less kind='offer_update' message
+    (session_id = offer_id, so the whole offer thread shares one session). At most one
+    PENDING claim per (offer, claimant); re-claiming after a rejection or a failed
+    assignment is allowed."""
+    if note is not None and len(note.encode("utf-8")) > max_note:
+        raise ValueError(f"Claim note exceeds the {max_note}-byte limit")
+    now = time.time()
+    async with _connect(db_path) as db:
+        async with db.execute("SELECT * FROM job_offers WHERE id=?", (offer_id,)) as cursor:
+            offer = await cursor.fetchone()
+        if not offer:
+            raise ValueError(f"Offer {offer_id} not found")
+        if offer["status"] != "open" or offer["expires_at"] < now:
+            shown = "expired" if offer["status"] == "open" else offer["status"]
+            raise ValueError(f"Offer {offer_id} is not open (status: {shown})")
+        if offer["poster_id"] == agent_id:
+            raise ValueError("You cannot claim your own offer")
+        async with db.execute("SELECT 1 FROM agents WHERE id=?", (agent_id,)) as cursor:
+            if not await cursor.fetchone():
+                raise ValueError(f"Claimant {agent_id} is not a registered agent")
+        async with db.execute(
+            "SELECT 1 FROM job_claims WHERE offer_id=? AND claimant_id=? AND status='pending'",
+            (offer_id, agent_id),
+        ) as cursor:
+            if await cursor.fetchone():
+                raise ValueError("You already have a pending claim on this offer")
+
+        claim_id = str(uuid.uuid4())
+        await db.execute("""
+            INSERT INTO job_claims (id, offer_id, claimant_id, note, status, created_at, updated_at)
+            VALUES (?, ?, ?, ?, 'pending', ?, ?)
+        """, (claim_id, offer_id, agent_id, note, now, now))
+        async with db.execute(
+            "SELECT COUNT(*) AS n FROM job_claims WHERE offer_id=? AND status='pending'",
+            (offer_id,),
+        ) as cursor:
+            pending = (await cursor.fetchone())["n"]
+        await db.commit()
+
+    # Notify the poster (ack-less; internal=True so a stale/offline poster can't strand the
+    # claim — the board row is the source of truth either way).
+    await enqueue_message(
+        db_path, sender_id=agent_id, recipient_id=offer["poster_id"],
+        payload=(
+            f"{agent_id} claimed your offer {offer_id}"
+            + (f" — note: {note}" if note else "")
+            + f". {pending} pending claim(s). Pick one with resolve_offer(poster_id='{offer['poster_id']}', "
+            + f"offer_id='{offer_id}', action='select', claimant_id=...) or action='withdraw'."
+        ),
+        session_id=offer_id, kind="offer_update", internal=True,
+        subject=f"Claim on offer: {offer['subject'] or offer_id[:8]}"[:OFFER_MAX_SUBJECT],
+    )
+    return {"claim_id": claim_id, "offer_id": offer_id, "pending_claims": pending}
+
+@retry_on_lock()
+async def resolve_offer(db_path, poster_id, offer_id, action, claimant_id=None):
+    """Poster decision on an open offer — the confirmation leg of the AHB-2 two-way verify
+    (posting and claiming are the two intents; this closes the handshake).
+
+    action='select': pick one pending claimant → offer 'assigned', the winner's claim
+    'selected', every other pending claim 'rejected' (each rejected claimant notified with
+    an ack-less offer_update). The hub then auto-sends the offer payload as a NORMAL
+    kind='task' message (poster → winner, session_id = offer_id), so the existing
+    ack/redeliver/result/failure machinery drives execution — the winner's "you got it"
+    signal IS the task itself.
+    action='withdraw': offer → 'withdrawn'; pending claims rejected + claimants notified.
+    """
+    now = time.time()
+    async with _connect(db_path) as db:
+        async with db.execute("SELECT * FROM job_offers WHERE id=?", (offer_id,)) as cursor:
+            offer = await cursor.fetchone()
+        if not offer:
+            raise ValueError(f"Offer {offer_id} not found")
+        if offer["poster_id"] != poster_id:
+            raise ValueError(f"Only the poster ({offer['poster_id']}) can resolve this offer")
+        if offer["status"] != "open":
+            raise ValueError(f"Offer {offer_id} is not open (status: {offer['status']})")
+        if action == "select":
+            if offer["expires_at"] < now:
+                raise ValueError(f"Offer {offer_id} has expired")
+            if not claimant_id:
+                raise ValueError("action='select' requires claimant_id")
+            async with db.execute(
+                "SELECT id FROM job_claims WHERE offer_id=? AND claimant_id=? AND status='pending'",
+                (offer_id, claimant_id),
+            ) as cursor:
+                claim = await cursor.fetchone()
+            if not claim:
+                raise ValueError(f"{claimant_id} has no pending claim on offer {offer_id}")
+        elif action != "withdraw":
+            raise ValueError("action must be 'select' or 'withdraw'")
+
+        loser_filter = "AND claimant_id != ?" if action == "select" else ""
+        params = (offer_id, claimant_id) if action == "select" else (offer_id,)
+        async with db.execute(
+            f"SELECT claimant_id FROM job_claims WHERE offer_id=? AND status='pending' {loser_filter}",
+            params,
+        ) as cursor:
+            losers = [r["claimant_id"] for r in await cursor.fetchall()]
+        await db.execute(
+            f"UPDATE job_claims SET status='rejected', updated_at=? WHERE offer_id=? AND status='pending' {loser_filter}",
+            (now,) + params,
+        )
+        if action == "select":
+            await db.execute(
+                "UPDATE job_claims SET status='selected', updated_at=? WHERE id=?",
+                (now, claim["id"]),
+            )
+            await db.execute(
+                "UPDATE job_offers SET status='assigned', claimant_id=?, updated_at=? WHERE id=? AND status='open'",
+                (claimant_id, now, offer_id),
+            )
+        else:
+            await db.execute(
+                "UPDATE job_offers SET status='withdrawn', updated_at=? WHERE id=? AND status='open'",
+                (now, offer_id),
+            )
+        await db.commit()
+
+    task_message_id = None
+    if action == "select":
+        # internal=True: the winner explicitly asked for this work — a stale (or briefly
+        # offline) claimant must still receive the assignment.
+        res = await enqueue_message(
+            db_path, sender_id=poster_id, recipient_id=claimant_id,
+            payload=offer["payload"],
+            context=f"Assigned from job offer {offer_id}: you claimed it and the poster selected you.",
+            session_id=offer_id, kind="task", internal=True,
+            subject=offer["subject"],
+        )
+        task_message_id = res["message_id"]
+        async with _connect(db_path) as db:
+            # Linkage for the failure re-open hook (_reopen_offer_on_task_failure).
+            await db.execute(
+                "UPDATE job_offers SET task_message_id=? WHERE id=?", (task_message_id, offer_id)
+            )
+            await db.commit()
+
+    for loser in losers:
+        await enqueue_message(
+            db_path, sender_id=poster_id, recipient_id=loser,
+            payload=(
+                (f"Your claim on offer {offer_id} was not selected"
+                 if action == "select"
+                 else f"Offer {offer_id} was withdrawn by the poster")
+                + " — no action needed."
+            ),
+            session_id=offer_id, kind="offer_update", internal=True,
+            subject=(
+                (f"Not selected: {offer['subject'] or offer_id[:8]}"
+                 if action == "select"
+                 else f"Withdrawn: {offer['subject'] or offer_id[:8]}")
+            )[:OFFER_MAX_SUBJECT],
+        )
+
+    return {
+        "offer_id": offer_id,
+        "status": "assigned" if action == "select" else "withdrawn",
+        "claimant_id": claimant_id if action == "select" else None,
+        "task_message_id": task_message_id,
+        "rejected_claims": len(losers),
+    }
+
+@retry_on_lock()
+async def list_offers(db_path, status=None, limit=100):
+    """Browse the job board (AHB-2): offers newest-first with their claims attached and
+    required_skills parsed back to a list. `status` filters ('open'|'assigned'|'withdrawn'|
+    'expired'); None = all. An open offer past expires_at reads 'expired' here even before
+    the sweep persists that transition."""
+    now = time.time()
+    async with _connect(db_path) as db:
+        if status:
+            query = "SELECT * FROM job_offers WHERE status=? ORDER BY created_at DESC LIMIT ?"
+            params = (status, limit)
+        else:
+            query = "SELECT * FROM job_offers ORDER BY created_at DESC LIMIT ?"
+            params = (limit,)
+        async with db.execute(query, params) as cursor:
+            offers = [dict(r) for r in await cursor.fetchall()]
+        for o in offers:
+            async with db.execute(
+                "SELECT claimant_id, note, status, created_at FROM job_claims WHERE offer_id=? ORDER BY created_at",
+                (o["id"],),
+            ) as cursor:
+                o["claims"] = [dict(r) for r in await cursor.fetchall()]
+            try:
+                o["required_skills"] = json.loads(o["required_skills"]) if o["required_skills"] else []
+            except (ValueError, TypeError):
+                o["required_skills"] = []
+            if o["status"] == "open" and o["expires_at"] is not None and o["expires_at"] < now:
+                o["status"] = "expired"
+    if status:
+        offers = [o for o in offers if o["status"] == status]
+    return offers
+
+@retry_on_lock()
+async def expire_offers(db_path):
+    """Sweep open offers past expires_at → 'expired'; reject their pending claims and
+    notify each pending claimant (ack-less offer_update). Companion to expire_messages
+    (D24), run from the same background sweeper. Returns the number of offers expired."""
+    now = time.time()
+    async with _connect(db_path) as db:
+        async with db.execute(
+            "UPDATE job_offers SET status='expired', updated_at=? WHERE status='open' AND expires_at < ? RETURNING id, poster_id, subject",
+            (now, now),
+        ) as cursor:
+            expired = [dict(r) for r in await cursor.fetchall()]
+        notify = []
+        for o in expired:
+            async with db.execute(
+                "SELECT claimant_id FROM job_claims WHERE offer_id=? AND status='pending'", (o["id"],)
+            ) as cursor:
+                claimants = [r["claimant_id"] for r in await cursor.fetchall()]
+            await db.execute(
+                "UPDATE job_claims SET status='rejected', updated_at=? WHERE offer_id=? AND status='pending'",
+                (now, o["id"]),
+            )
+            notify.extend((o, c) for c in claimants)
+        await db.commit()
+    for o, claimant in notify:
+        await enqueue_message(
+            db_path, sender_id=o["poster_id"], recipient_id=claimant,
+            payload=f"Offer {o['id']} expired before the poster selected a claimant — no action needed.",
+            session_id=o["id"], kind="offer_update", internal=True,
+            subject=f"Expired: {o['subject'] or o['id'][:8]}"[:OFFER_MAX_SUBJECT],
+        )
+    return len(expired)
+
+@retry_on_lock()
+async def _reopen_offer_on_task_failure(db_path, task_message_id):
+    """AHB-2 lifecycle: a failed assignment hands the offer back to the board (within TTL)
+    so other agents can claim it; past TTL it expires instead. The winning claim flips
+    'selected'→'failed', and the pending-only unique index lets the same agent re-claim
+    later. No extra poster notification: the normal D31 failure fan-out already reaches the
+    poster with session_id = offer_id, and the board shows the re-open."""
+    now = time.time()
+    async with _connect(db_path) as db:
+        async with db.execute(
+            "SELECT id, expires_at FROM job_offers WHERE task_message_id=? AND status='assigned'",
+            (task_message_id,),
+        ) as cursor:
+            offer = await cursor.fetchone()
+        if not offer:
+            return False
+        new_status = "open" if (offer["expires_at"] is not None and offer["expires_at"] > now) else "expired"
+        await db.execute(
+            "UPDATE job_offers SET status=?, claimant_id=NULL, task_message_id=NULL, updated_at=? WHERE id=?",
+            (new_status, now, offer["id"]),
+        )
+        await db.execute(
+            "UPDATE job_claims SET status='failed', updated_at=? WHERE offer_id=? AND status='selected'",
+            (now, offer["id"]),
+        )
+        await db.commit()
+    return True
+
+@retry_on_lock()
 async def claim_pending(db_path, agent_id, visibility_timeout=VISIBILITY_TIMEOUT):
     async with _connect(db_path) as db:
         now = time.time()
@@ -526,6 +917,9 @@ async def fail_message(db_path, message_id, error):
             kind="failure",
             internal=True,
         )
+        # AHB-2: if this task was a job-board assignment, hand the offer back to the board
+        # (or expire it if past TTL). No-op for ordinary tasks.
+        await _reopen_offer_on_task_failure(db_path, message_id)
 
 @retry_on_lock()
 async def get_message_endpoints(db_path, message_id):
@@ -572,13 +966,14 @@ async def expire_messages(db_path, message_ttl=MESSAGE_TTL):
     async with _connect(db_path) as db:
         now = time.time()
         cutoff = now - message_ttl
-        # Sweep unclaimed 'task' AND 'announcement' rows (D24, extended by AHB-1). Both have no
-        # dependent parent, so expiring them strands nothing; a never-claimed announcement must
-        # not linger forever. input_request/result/failure stay excluded (D24 carve-out).
+        # Sweep unclaimed 'task', 'announcement' AND 'offer_update' rows (D24, extended by
+        # AHB-1/AHB-2). None has a dependent parent, so expiring them strands nothing; a
+        # never-claimed notification must not linger forever. input_request/result/failure
+        # stay excluded (D24 carve-out).
         await db.execute("""
             UPDATE messages
             SET status = 'expired', updated_at = ?
-            WHERE status = 'pending' AND kind IN ('task', 'announcement') AND created_at < ?
+            WHERE status = 'pending' AND kind IN ('task', 'announcement', 'offer_update') AND created_at < ?
         """, (now, cutoff))
         await db.commit()
 

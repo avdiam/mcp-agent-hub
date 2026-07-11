@@ -2,6 +2,49 @@
 
 > Append-only log of what was accomplished each session. Pairs with `tasks.md` (what's left). This project travels between two PCs and uses **no local Claude memories** — this file is the durable record. Newest session first.
 
+## 2026-07-11 (later 6) — AHB-2 shipped (D36): the job-offer board (poster-picks auction)
+
+Directed follow-up after AHB-1 closed: **build AHB-2**. Design confirmed with the user pre-build
+via three explicit choices: **auction model** (claims accumulate, poster picks — over
+first-claim-locks), **auto-create task on select** (over match-only), **dashboard panel
+included**. One mechanic decided as implementation detail: **no enforced claim window** —
+poster selects whenever ready, bounded by the offer TTL. `pytest` **59/59** (44 → +15).
+
+- **Design shape — maximal reuse.** The board is a matchmaking layer in front of the existing
+  queue: posting broadcasts the advert (D33 caps, all-or-nothing; `context="job_offer:<id>"`;
+  late joiners get adverts via D35 catch-up for free); selection auto-sends the payload as a
+  **normal `kind="task"`** (`session_id = offer_id`) so ack/redeliver/result/failure drive
+  execution unchanged — the winner's "you got it" signal IS the task, and the whole lifecycle
+  reads as one stream on the dashboard. Board notifications (claim received / not selected /
+  withdrawn / expired) are a new **ack-less `kind="offer_update"`** (joined `NO_ACK_KINDS` +
+  the TTL sweep) because the offer **row** is the source of truth — a missed notification
+  strands nothing; state-machine timeouts, not ack obligations.
+- **Schema:** `job_offers` (open → assigned | withdrawn | expired; `task_message_id` links the
+  assignment; re-opened on its failure within TTL via `_reopen_offer_on_task_failure` hooked
+  into `fail_message`) + `job_claims` (pending → selected | rejected | failed) with a
+  **pending-only partial unique index** per (offer, claimant) so rejected/failed claimants can
+  re-claim after a re-open. Caps mirror D33 (4KB/120ch/1KB note) + **5 open offers per poster**;
+  TTL default 24h, clamp 60s–72h; `expire_offers` joined the background sweeper.
+- **Tools 10 → 14:** `post_offer`, `claim_offer`, `resolve_offer(select|withdraw)`,
+  `list_offers(status='open'|'assigned'|'withdrawn'|'expired'|'all')`. `poster_id` joined the
+  ActivityTracker's direct-actor args (D23-consistent). `delete_agent(purge_messages=True)` now
+  purges the agent's board footprint too (offers + their claims + its claims elsewhere).
+- **Dashboard:** read-only **Job Board** panel (hidden until the first offer): posted time,
+  subject, poster, skills, status badge, per-claimant marks (✓ selected / ✕ rejected / ⚠ failed,
+  note on hover), assigned-to, expires-in; `offers` added to `/api/state`; **BOARD** kind badge
+  for `offer_update` rows in the queue.
+- **Validation ladder:** 15 new unit tests (caps all-or-nothing incl. shared broadcast cooldown;
+  auction accumulation; guards; select/withdraw/expiry; failure re-open within/past TTL;
+  ordinary-task no-op; ack-less notifications; purge footprint) → deployed via `/api/restart` →
+  **live MCP smoke 10/10** (three probe agents over real HTTP: post → advert → 2 claims →
+  select → task → result fans back → loser notified → board shows assigned; probes purged
+  after, board + inboxes verified clean) → dashboard render check in Chrome (panel + claim
+  marks + one-stream threading confirmed).
+- **Docs:** D36 (+ footer), `agent-hub-issues.md` (AHB-2 → fixed, seeds reconciled), `specs.md`
+  (tools 11–14, schema, sweep, dashboard), `architecture.md`, `tasks.md` START-HERE, `AGENTS.md`
+  (board conventions). Next candidates: dashboard SSE push (workstream 2), AHB-10/publish,
+  dogfood the board with real peers.
+
 ## 2026-07-11 (later 5) — AHB-1 P2 shipped (D35): durable announcements via register-time catch-up
 
 Directed follow-up after the live validation: **build AHB-1 P2**. Design confirmed with the user

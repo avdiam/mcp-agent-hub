@@ -4,7 +4,7 @@ import asyncio
 from httpx import ASGITransport, AsyncClient
 
 from mcp_hub.hub import app, DB_PATH
-from mcp_hub.hub import register_agent, send_message, check_inbox, reply_to_message, check_status, request_input, broadcast_message, list_agents
+from mcp_hub.hub import register_agent, send_message, check_inbox, reply_to_message, check_status, request_input, broadcast_message, list_agents, post_offer, claim_offer, resolve_offer, list_offers
 import mcp_hub.db as db
 
 @pytest_asyncio.fixture
@@ -273,6 +273,70 @@ async def test_tunables_are_single_source():
     assert hub.STALE_THRESHOLD is db.STALE_THRESHOLD
     assert hub.VISIBILITY_TIMEOUT is db.VISIBILITY_TIMEOUT
     assert hub.MESSAGE_TTL is db.MESSAGE_TTL
+
+@pytest.mark.asyncio
+async def test_job_board_tool_roundtrip(test_client):
+    # AHB-2 end-to-end at the tool layer: post → advert reaches peers → claims accumulate →
+    # poster selects → winner gets a normal task → result fans back; /api/state shows the board.
+    await register_agent("poster", [], "Poster")
+    await register_agent("alice", [], "Alice")
+    await register_agent("bob", [], "Bob")
+
+    res = await post_offer("poster", "summarize the docs", subject="docs",
+                           required_skills=["writing"])
+    assert res["ok"] is True
+    offer_id = res["offer_id"]
+
+    alice_inbox = await check_inbox("alice", wait=False)
+    assert [m["kind"] for m in alice_inbox] == ["announcement"]
+    assert offer_id in alice_inbox[0]["payload"]
+
+    board = await list_offers()
+    assert [o["id"] for o in board] == [offer_id]
+    assert board[0]["required_skills"] == ["writing"]
+
+    assert (await claim_offer("alice", offer_id, note="I write well"))["ok"] is True
+    assert (await claim_offer("bob", offer_id))["ok"] is True
+    dup = await claim_offer("alice", offer_id)
+    assert dup["ok"] is False
+
+    sel = await resolve_offer("poster", offer_id, "select", claimant_id="alice")
+    assert sel["ok"] is True
+    task_id = sel["task_message_id"]
+
+    # The board's default (open) view no longer lists it.
+    assert await list_offers() == []
+    assert (await list_offers(status="assigned"))[0]["claimant_id"] == "alice"
+
+    # The winner works the assignment through the normal task machinery.
+    alice_tasks = [m for m in await check_inbox("alice", wait=False) if m["kind"] == "task"]
+    assert [m["id"] for m in alice_tasks] == [task_id]
+    await reply_to_message(task_id, "summary attached")
+    poster_results = [m for m in await check_inbox("poster", wait=False) if m["kind"] == "result"]
+    assert len(poster_results) == 1
+    assert poster_results[0]["response"] == "summary attached"
+    assert poster_results[0]["session_id"] == offer_id
+
+    # The loser was told, ack-lessly.
+    bob_updates = [m for m in await check_inbox("bob", wait=False) if m["kind"] == "offer_update"]
+    assert len(bob_updates) == 1
+    assert "not selected" in bob_updates[0]["payload"]
+
+    # Dashboard state carries the board.
+    res_state = await test_client.get("/api/state", headers={"Origin": "http://localhost"})
+    assert res_state.status_code == 200
+    offers = res_state.json()["offers"]
+    assert offers[0]["id"] == offer_id
+    assert offers[0]["status"] == "assigned"
+
+@pytest.mark.asyncio
+async def test_post_offer_tool_cap_error():
+    # A cap violation returns a clean structured error, not a raw exception.
+    await register_agent("poster", [], "Poster")
+    res = await post_offer("poster", "x" * 5000)
+    assert res["ok"] is False
+    assert "payload" in res["error"]
+    assert await list_offers() == []
 
 @pytest.mark.asyncio
 async def test_api_recovery_middleware(test_client):

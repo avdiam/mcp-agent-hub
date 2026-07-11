@@ -13,7 +13,7 @@
 | ID | Status | Title | Reporter | Opened |
 |----|--------|-------|----------|--------|
 | AHB-1 | fixed | Broadcast / announce capability (with flood caps) — P1 shipped (D33); P2 catch-up + dashboard control shipped (D35) | avdia (user) | 2026-06-19 |
-| AHB-2 | open | Job-offer board: offer → claim → 2-way verify → assign/drop (P2-era) | avdia (user) | 2026-06-19 |
+| AHB-2 | ✅ fixed | Job-offer board: offer → claim → 2-way verify → assign/drop (P2-era) | avdia (user) | 2026-06-19 |
 | AHB-3 | fixed | No-claim heartbeat endpoint (refresh `last_seen` without claiming) | wiki-forge (peer) | 2026-06-19 |
 | AHB-4 | fixed | Canonical `hub_peek.py` improvements (backport from wiki-forge variant) | nexus (peer) | 2026-06-20 |
 | AHB-5 | fixed | Opt-in sentinel-gated Stop-drain hook (for consent-gated harnesses) | nexus (peer) | 2026-06-20 |
@@ -241,12 +241,30 @@ the `broadcasts` audit table + structural `session_id` dedupe replaced both) and
 
 ## AHB-2 — Job-offer board (offer → claim → 2-way verify → assign/drop)
 
-- **Status:** open — idea captured 2026-06-19; **analyze/design during the P2 timeframe**,
-  after AHB-1 P1 lands and its tests pass. Do NOT build yet.
+- **Status:** ✅ **fixed (2026-07-11) via D36.** Shipped as a **poster-picks auction** (user's
+  choice over first-claim-locks) built on the existing machinery: `post_offer` broadcasts an
+  advert under the poster's own D33 flood caps (all-or-nothing — caps reject → no offer row;
+  `context="job_offer:<id>"` for machine parsing); claims accumulate with **no enforced
+  window** (poster selects whenever ready, bounded by the offer TTL — default 24h, clamp
+  60s–72h, swept by `expire_offers`); `resolve_offer(action='select')` assigns and **auto-sends
+  the payload as a normal `kind="task"`** (poster → winner, `session_id = offer_id`) so
+  ack/redeliver/result/failure drive execution unchanged — user's choice over match-only;
+  `action='withdraw'` takes it down. Board notifications (claim received / not selected /
+  withdrawn / expired) are a new **ack-less `kind="offer_update"`** (the offer row is the
+  source of truth; a missed notification strands nothing). A **failed assignment re-opens the
+  offer** within TTL (claim flips `selected`→`failed`; the pending-only unique index allows
+  re-claiming); the poster learns via the normal D31 failure fan-out on the same session — no
+  extra message. Tables `job_offers` + `job_claims`; tools 10 → 14 (`post_offer`,
+  `claim_offer`, `resolve_offer`, `list_offers`); caps mirror D33 + **5 open offers per
+  poster**; `delete_agent(purge_messages=True)` purges the board footprint too; read-only
+  dashboard **Job Board** panel fed by `offers` in `/api/state`. Validation: 15 new unit tests
+  (59/59 green), a 10/10 live MCP smoke (post → advert → 2 claims → select → task → result →
+  loser notified), and a dashboard render check. Design confirmed with the user before build
+  (auction model, auto-create task, dashboard panel included).
 - **Reporter:** avdia (user)
 - **Opened:** 2026-06-19
 - **Relates to:** [AHB-1](#ahb-1--broadcast--announce-capability-with-flood-caps) P2; `tasks.md`
-  dogfood / new-features.
+  dogfood / new-features; D36 in `design-decisions.md`.
 
 ### Concept
 A lightweight job/task marketplace on the hub:
@@ -279,7 +297,15 @@ the "post to everyone" step, then adds the claim+verify state machine.
   `caller_id`/auth model (D11/D23 v2).
 
 ### Next step
-Analyze & scope during P2 (after AHB-1 P1 ships and tests are green). **No work now.**
+~~Analyze & scope during P2 (after AHB-1 P1 ships and tests are green). **No work now.**~~
+Done — analyzed, design confirmed with the user (auction model / auto-create task / dashboard
+panel), and shipped 2026-07-11 as D36. Of the seeds above: the dedicated table + tools landed
+(without a `kind="job_offer"` — the advert is a plain announcement with a `job_offer:<id>`
+context tag); discovery = broadcast advert + `list_offers` browse (skills are informational,
+no hard matching); concurrency resolved by poster-selects (not first-claim-wins); the
+verification protocol is post → claim → select (no `request_input` reuse needed); TTL,
+withdraw, and re-open-on-failure all shipped; caps are D33-consistent and the free-text actor
+args remain compatible with the future `caller_id`/auth model (D11/D23 v2).
 
 ---
 

@@ -37,6 +37,7 @@ async def background_sweeper():
         try:
             await db.reclaim_stale(DB_PATH, visibility_timeout=VISIBILITY_TIMEOUT)
             await db.expire_messages(DB_PATH, message_ttl=MESSAGE_TTL)
+            await db.expire_offers(DB_PATH)
         except Exception as e:
             logging.error(f"Sweeper error: {e}")
         await asyncio.sleep(VISIBILITY_TIMEOUT / 2)
@@ -104,7 +105,8 @@ class ActivityTracker:
         msg = getattr(context, "message", None)
         tool_name = getattr(msg, "name", "unknown") if (method == "tools/call" and msg) else "unknown"
         args = getattr(msg, "arguments", {}) or {}
-        caller = args.get("agent_id") or args.get("sender_id")
+        # poster_id is resolve_offer's direct actor arg (AHB-2) — same D23 rule as the others.
+        caller = args.get("agent_id") or args.get("sender_id") or args.get("poster_id")
 
         message_id = args.get("message_id")
         arg_summary = str(args)[:100] + "..." if len(str(args)) > 100 else str(args)
@@ -274,6 +276,78 @@ async def check_status(message_id: str) -> dict:
     return await db.get_status(DB_PATH, message_id)
 
 @mcp.tool()
+async def post_offer(sender_id: str, payload: str, subject: str | None = None,
+                     required_skills: list[str] | None = None, ttl_seconds: int | None = None) -> dict:
+    """
+    Post a job offer to the hub's job board: work open for ANY agent to claim, not addressed
+    to a specific recipient (use send_message for that). The offer is announced to all
+    connected agents as a broadcast — your broadcast flood caps apply — and stays on the
+    board until assigned, withdrawn, or expired (default TTL 24h). Interested agents call
+    claim_offer; claims accumulate and YOU pick exactly one winner with
+    resolve_offer(action='select') whenever you're ready, or take it down with
+    resolve_offer(action='withdraw'). On selection the hub automatically sends your payload
+    to the winner as a normal task, so you'll get its result/failure in your inbox like any
+    task you sent. Returns {"ok": true, "offer_id", ...} or {"ok": false, "error"} on a cap
+    violation (payload/subject size, 5-open-offers-per-poster, broadcast cooldown).
+    """
+    try:
+        result = await db.post_offer(
+            DB_PATH, sender_id, payload, subject=subject, required_skills=required_skills,
+            ttl=ttl_seconds if ttl_seconds else db.OFFER_DEFAULT_TTL,
+        )
+        return {"ok": True, **result}
+    except ValueError as e:
+        return {"ok": False, "error": str(e)}
+
+@mcp.tool()
+async def claim_offer(agent_id: str, offer_id: str, note: str | None = None) -> dict:
+    """
+    Claim an open job offer from the board: express that you want to do the work. Claiming
+    does NOT assign it to you — the poster reviews all claims and selects one claimant; if
+    that's you, the work arrives in your inbox as a normal task (reply_to_message /
+    fail_message it like any task). If you're not selected, or the offer is withdrawn or
+    expires, you'll get an informational (ack-less) offer_update message instead. Add a
+    short `note` to make your case (relevant skills, availability). One pending claim per
+    offer; you may claim again if the offer re-opens.
+    Returns {"ok": true, "claim_id", "pending_claims"} or {"ok": false, "error"}.
+    """
+    try:
+        result = await db.claim_offer(DB_PATH, agent_id, offer_id, note=note)
+        return {"ok": True, **result}
+    except ValueError as e:
+        return {"ok": False, "error": str(e)}
+
+@mcp.tool()
+async def resolve_offer(poster_id: str, offer_id: str, action: str, claimant_id: str | None = None) -> dict:
+    """
+    Decide the outcome of a job offer YOU posted.
+    action='select' (requires claimant_id): assign the offer to that pending claimant. The
+    hub sends your offer payload to them as a normal task (its result/failure comes back to
+    your inbox), and every other claimant is notified they weren't selected.
+    action='withdraw': take the offer off the board; pending claimants are notified.
+    If the selected claimant later fails the task, the offer automatically re-opens on the
+    board (within its TTL) so others can claim it.
+    Returns {"ok": true, "status", "task_message_id", ...} or {"ok": false, "error"}.
+    """
+    try:
+        result = await db.resolve_offer(DB_PATH, poster_id, offer_id, action, claimant_id=claimant_id)
+        return {"ok": True, **result}
+    except ValueError as e:
+        return {"ok": False, "error": str(e)}
+
+@mcp.tool()
+async def list_offers(status: str | None = "open") -> list[dict]:
+    """
+    Browse the hub's job board. By default returns OPEN (claimable) offers, newest first,
+    each with its full payload, required skills, and current claims. Pass
+    status='assigned'/'withdrawn'/'expired' for history, or status='all' for everything.
+    Use this to find work matching your skills, then claim_offer what you want to do.
+    """
+    if status in (None, "", "all"):
+        status = None
+    return await db.list_offers(DB_PATH, status=status)
+
+@mcp.tool()
 async def disconnect_agent(agent_id: str) -> str:
     """
     Explicitly mark yourself as offline. Peers will not be able to send new messages to you.
@@ -330,13 +404,15 @@ async def api_state():
 
     messages = await db.get_recent_messages(DB_PATH, limit=DASHBOARD_MESSAGE_LIMIT)
     stats = await db.get_stats(DB_PATH)
-    
+    offers = await db.list_offers(DB_PATH)  # all statuses — the board panel filters client-side
+
     uptime = now - START_TIME
     stats["uptime"] = uptime
-    
+
     return {
         "agents": agents,
         "messages": messages,
+        "offers": offers,
         "events": list(activity_buffer),
         "stats": stats
     }

@@ -171,7 +171,7 @@ async def test_delete_agent_option_a_keeps_messages(temp_db):
 
     # Option A (default): agent row removed, messages preserved
     result = await db.delete_agent(temp_db, "victim")
-    assert result == {"agents_deleted": 1, "messages_deleted": 0}
+    assert result == {"agents_deleted": 1, "messages_deleted": 0, "offers_deleted": 0}
 
     agents = await db.get_all_agents(temp_db)
     assert [a["id"] for a in agents] == ["peer"]
@@ -630,3 +630,309 @@ async def test_broadcast_unclaimed_announcement_expires(temp_db):
         async with conn.execute("SELECT DISTINCT status FROM messages WHERE kind='announcement'") as cursor:
             statuses = [r[0] for r in await cursor.fetchall()]
     assert statuses == ["expired"]
+
+# --- AHB-2: job-offer board ---
+
+async def _age_broadcast_cooldown(db_file):
+    # post_offer broadcasts under the poster's own flood caps; tests that post repeatedly
+    # age the cooldown out, same trick as the catch-up window tests.
+    async with aiosqlite.connect(db_file) as conn:
+        await conn.execute("UPDATE broadcasts SET created_at = created_at - 61")
+        await conn.commit()
+
+@pytest.mark.asyncio
+async def test_post_offer_creates_row_and_advert(temp_db):
+    await db.upsert_agent(temp_db, "poster", "[]")
+    await db.upsert_agent(temp_db, "watcher", "[]")
+    res = await db.post_offer(temp_db, "poster", "build a parser", subject="parser work",
+                              required_skills=["python"])
+    offer_id = res["offer_id"]
+
+    offers = await db.list_offers(temp_db)
+    assert len(offers) == 1
+    o = offers[0]
+    assert o["id"] == offer_id
+    assert o["status"] == "open"
+    assert o["poster_id"] == "poster"
+    assert o["payload"] == "build a parser"
+    assert o["required_skills"] == ["python"]
+    assert o["claims"] == []
+    assert o["expires_at"] > time.time()
+
+    # The advert broadcast reached the watcher, tagged machine-parseably in context.
+    inbox = await db.claim_pending(temp_db, "watcher")
+    ads = [m for m in inbox if m["kind"] == "announcement"]
+    assert len(ads) == 1
+    assert offer_id in ads[0]["payload"]
+    assert ads[0]["context"] == f"job_offer:{offer_id}"
+    assert ads[0]["subject"].startswith("[job]")
+
+@pytest.mark.asyncio
+async def test_post_offer_caps_reject_and_insert_nothing(temp_db):
+    await db.upsert_agent(temp_db, "poster", "[]")
+    with pytest.raises(ValueError, match="not a registered agent"):
+        await db.post_offer(temp_db, "ghost", "work")
+    with pytest.raises(ValueError, match="payload"):
+        await db.post_offer(temp_db, "poster", "x" * (db.OFFER_MAX_PAYLOAD + 1))
+    with pytest.raises(ValueError, match="subject"):
+        await db.post_offer(temp_db, "poster", "work", subject="s" * (db.OFFER_MAX_SUBJECT + 1))
+    with pytest.raises(ValueError, match="empty"):
+        await db.post_offer(temp_db, "poster", "   ")
+    assert await db.list_offers(temp_db) == []
+    async with aiosqlite.connect(temp_db) as conn:
+        async with conn.execute("SELECT COUNT(*) FROM broadcasts") as cursor:
+            assert (await cursor.fetchone())[0] == 0  # rejections never broadcast
+
+    # Open-offer cap: the 6th open offer from one poster is rejected (checked BEFORE the
+    # broadcast, so it consumes no broadcast budget either).
+    for i in range(db.OFFER_MAX_OPEN_PER_POSTER):
+        await db.post_offer(temp_db, "poster", f"work {i}")
+        await _age_broadcast_cooldown(temp_db)
+    with pytest.raises(ValueError, match="Open-offer cap"):
+        await db.post_offer(temp_db, "poster", "one too many")
+    assert len(await db.list_offers(temp_db, status="open")) == db.OFFER_MAX_OPEN_PER_POSTER
+
+@pytest.mark.asyncio
+async def test_post_offer_shares_broadcast_cooldown(temp_db):
+    # Posting an offer IS a broadcast: offer spam and broadcast spam share one budget,
+    # and a cooldown rejection posts no offer row (all-or-nothing).
+    await db.upsert_agent(temp_db, "poster", "[]")
+    await db.post_offer(temp_db, "poster", "first")
+    with pytest.raises(ValueError, match="cooldown"):
+        await db.post_offer(temp_db, "poster", "second too soon")
+    assert len(await db.list_offers(temp_db)) == 1
+
+@pytest.mark.asyncio
+async def test_claim_offer_accumulates_and_notifies_poster(temp_db):
+    await db.upsert_agent(temp_db, "poster", "[]")
+    await db.upsert_agent(temp_db, "alice", "[]")
+    await db.upsert_agent(temp_db, "bob", "[]")
+    offer_id = (await db.post_offer(temp_db, "poster", "work", subject="w"))["offer_id"]
+
+    c1 = await db.claim_offer(temp_db, "alice", offer_id, note="I know parsers")
+    assert c1["pending_claims"] == 1
+    c2 = await db.claim_offer(temp_db, "bob", offer_id)
+    assert c2["pending_claims"] == 2
+
+    # Auction model: the offer stays open while claims accumulate — no first-claim lock.
+    o = (await db.list_offers(temp_db, status="open"))[0]
+    assert [c["claimant_id"] for c in o["claims"]] == ["alice", "bob"]
+
+    # Poster is notified with ack-less offer_updates, session-threaded to the offer.
+    inbox = await db.claim_pending(temp_db, "poster")
+    ups = [m for m in inbox if m["kind"] == "offer_update"]
+    assert len(ups) == 2
+    assert all(m["session_id"] == offer_id for m in ups)
+    assert "I know parsers" in ups[0]["payload"]
+    # Ack-less: auto-completed on claim, never redelivered.
+    again = await db.claim_pending(temp_db, "poster")
+    assert [m for m in again if m["kind"] == "offer_update"] == []
+
+@pytest.mark.asyncio
+async def test_claim_offer_guards(temp_db):
+    await db.upsert_agent(temp_db, "poster", "[]")
+    await db.upsert_agent(temp_db, "alice", "[]")
+    offer_id = (await db.post_offer(temp_db, "poster", "work"))["offer_id"]
+
+    with pytest.raises(ValueError, match="not found"):
+        await db.claim_offer(temp_db, "alice", "no-such-offer")
+    with pytest.raises(ValueError, match="your own offer"):
+        await db.claim_offer(temp_db, "poster", offer_id)
+    with pytest.raises(ValueError, match="not a registered agent"):
+        await db.claim_offer(temp_db, "ghost", offer_id)
+    with pytest.raises(ValueError, match="note exceeds"):
+        await db.claim_offer(temp_db, "alice", offer_id, note="n" * (db.OFFER_MAX_NOTE + 1))
+    await db.claim_offer(temp_db, "alice", offer_id)
+    with pytest.raises(ValueError, match="already have a pending claim"):
+        await db.claim_offer(temp_db, "alice", offer_id)
+
+@pytest.mark.asyncio
+async def test_resolve_select_assigns_creates_task_rejects_losers(temp_db):
+    await db.upsert_agent(temp_db, "poster", "[]")
+    await db.upsert_agent(temp_db, "alice", "[]")
+    await db.upsert_agent(temp_db, "bob", "[]")
+    offer_id = (await db.post_offer(temp_db, "poster", "build it", subject="build"))["offer_id"]
+    await db.claim_offer(temp_db, "alice", offer_id)
+    await db.claim_offer(temp_db, "bob", offer_id)
+
+    res = await db.resolve_offer(temp_db, "poster", offer_id, "select", claimant_id="alice")
+    assert res["status"] == "assigned"
+    assert res["rejected_claims"] == 1
+    task_id = res["task_message_id"]
+
+    o = (await db.list_offers(temp_db))[0]
+    assert o["status"] == "assigned"
+    assert o["claimant_id"] == "alice"
+    assert o["task_message_id"] == task_id
+    assert {c["claimant_id"]: c["status"] for c in o["claims"]} == {
+        "alice": "selected", "bob": "rejected"}
+
+    # The winner's "you got it" signal IS a normal ackable task with the full payload,
+    # session-threaded to the offer.
+    tasks = [m for m in await db.claim_pending(temp_db, "alice") if m["kind"] == "task"]
+    assert len(tasks) == 1
+    assert tasks[0]["id"] == task_id
+    assert tasks[0]["payload"] == "build it"
+    assert tasks[0]["session_id"] == offer_id
+    assert tasks[0]["sender_id"] == "poster"
+
+    # The loser is told, ack-lessly.
+    ups = [m for m in await db.claim_pending(temp_db, "bob") if m["kind"] == "offer_update"]
+    assert len(ups) == 1
+    assert "not selected" in ups[0]["payload"]
+
+    # Completing the task fans the result back to the poster via the existing machinery.
+    await db.complete_message(temp_db, task_id, "done!")
+    results = [m for m in await db.claim_pending(temp_db, "poster") if m["kind"] == "result"]
+    assert len(results) == 1
+    assert results[0]["response"] == "done!"
+    assert results[0]["session_id"] == offer_id
+
+@pytest.mark.asyncio
+async def test_resolve_offer_guards(temp_db):
+    await db.upsert_agent(temp_db, "poster", "[]")
+    await db.upsert_agent(temp_db, "alice", "[]")
+    offer_id = (await db.post_offer(temp_db, "poster", "work"))["offer_id"]
+
+    with pytest.raises(ValueError, match="not found"):
+        await db.resolve_offer(temp_db, "poster", "no-such-offer", "withdraw")
+    with pytest.raises(ValueError, match="Only the poster"):
+        await db.resolve_offer(temp_db, "alice", offer_id, "withdraw")
+    with pytest.raises(ValueError, match="requires claimant_id"):
+        await db.resolve_offer(temp_db, "poster", offer_id, "select")
+    with pytest.raises(ValueError, match="no pending claim"):
+        await db.resolve_offer(temp_db, "poster", offer_id, "select", claimant_id="alice")
+    with pytest.raises(ValueError, match="must be 'select' or 'withdraw'"):
+        await db.resolve_offer(temp_db, "poster", offer_id, "explode")
+
+@pytest.mark.asyncio
+async def test_withdraw_rejects_and_notifies_claimants(temp_db):
+    await db.upsert_agent(temp_db, "poster", "[]")
+    await db.upsert_agent(temp_db, "alice", "[]")
+    offer_id = (await db.post_offer(temp_db, "poster", "work"))["offer_id"]
+    await db.claim_offer(temp_db, "alice", offer_id)
+
+    res = await db.resolve_offer(temp_db, "poster", offer_id, "withdraw")
+    assert res["status"] == "withdrawn"
+    o = (await db.list_offers(temp_db))[0]
+    assert o["status"] == "withdrawn"
+    assert all(c["status"] == "rejected" for c in o["claims"])
+
+    ups = [m for m in await db.claim_pending(temp_db, "alice") if m["kind"] == "offer_update"]
+    assert any("withdrawn" in m["payload"] for m in ups)
+
+    # A withdrawn offer is terminal: no more claims, no re-resolution.
+    with pytest.raises(ValueError, match="not open"):
+        await db.claim_offer(temp_db, "alice", offer_id)
+    with pytest.raises(ValueError, match="not open"):
+        await db.resolve_offer(temp_db, "poster", offer_id, "withdraw")
+
+@pytest.mark.asyncio
+async def test_expire_offers_sweep(temp_db):
+    await db.upsert_agent(temp_db, "poster", "[]")
+    await db.upsert_agent(temp_db, "alice", "[]")
+    offer_id = (await db.post_offer(temp_db, "poster", "work"))["offer_id"]
+    await db.claim_offer(temp_db, "alice", offer_id)
+    # Drain both inboxes so the asserts below see only the sweep's output.
+    await db.claim_pending(temp_db, "alice")
+    await db.claim_pending(temp_db, "poster")
+
+    async with aiosqlite.connect(temp_db) as conn:
+        await conn.execute("UPDATE job_offers SET expires_at=? WHERE id=?",
+                           (time.time() - 1, offer_id))
+        await conn.commit()
+
+    # The lazy view reads 'expired' even before the sweep persists it, and the offer no
+    # longer shows as open/claimable.
+    assert (await db.list_offers(temp_db))[0]["status"] == "expired"
+    assert await db.list_offers(temp_db, status="open") == []
+    with pytest.raises(ValueError, match="expired"):
+        await db.claim_offer(temp_db, "alice", offer_id)
+
+    assert await db.expire_offers(temp_db) == 1
+    o = (await db.list_offers(temp_db, status="expired"))[0]
+    assert o["claims"][0]["status"] == "rejected"
+    ups = [m for m in await db.claim_pending(temp_db, "alice") if m["kind"] == "offer_update"]
+    assert len(ups) == 1
+    assert "expired" in ups[0]["payload"]
+    assert await db.expire_offers(temp_db) == 0  # idempotent
+
+@pytest.mark.asyncio
+async def test_failed_assignment_reopens_offer_and_allows_reclaim(temp_db):
+    await db.upsert_agent(temp_db, "poster", "[]")
+    await db.upsert_agent(temp_db, "alice", "[]")
+    offer_id = (await db.post_offer(temp_db, "poster", "work"))["offer_id"]
+    await db.claim_offer(temp_db, "alice", offer_id)
+    res = await db.resolve_offer(temp_db, "poster", offer_id, "select", claimant_id="alice")
+    task_id = res["task_message_id"]
+
+    await db.claim_pending(temp_db, "alice")  # claim the assignment task
+    await db.fail_message(temp_db, task_id, "can not do it after all")
+
+    o = (await db.list_offers(temp_db))[0]
+    assert o["status"] == "open"  # back on the board (still within TTL)
+    assert o["claimant_id"] is None
+    assert o["task_message_id"] is None
+    assert {c["status"] for c in o["claims"]} == {"failed"}
+
+    # The poster still gets the normal D31 failure fan-out, threaded to the offer session.
+    fails = [m for m in await db.claim_pending(temp_db, "poster") if m["kind"] == "failure"]
+    assert len(fails) == 1
+    assert fails[0]["session_id"] == offer_id
+
+    # The pending-only unique index lets the same agent claim again.
+    again = await db.claim_offer(temp_db, "alice", offer_id)
+    assert again["pending_claims"] == 1
+
+@pytest.mark.asyncio
+async def test_failed_assignment_past_ttl_expires_instead(temp_db):
+    await db.upsert_agent(temp_db, "poster", "[]")
+    await db.upsert_agent(temp_db, "alice", "[]")
+    offer_id = (await db.post_offer(temp_db, "poster", "work"))["offer_id"]
+    await db.claim_offer(temp_db, "alice", offer_id)
+    task_id = (await db.resolve_offer(temp_db, "poster", offer_id, "select",
+                                      claimant_id="alice"))["task_message_id"]
+
+    async with aiosqlite.connect(temp_db) as conn:
+        await conn.execute("UPDATE job_offers SET expires_at=? WHERE id=?",
+                           (time.time() - 1, offer_id))
+        await conn.commit()
+
+    await db.claim_pending(temp_db, "alice")
+    await db.fail_message(temp_db, task_id, "too late")
+    assert (await db.list_offers(temp_db))[0]["status"] == "expired"
+
+@pytest.mark.asyncio
+async def test_delete_agent_purge_covers_board_footprint(temp_db):
+    # Purging an agent must not leave its board rows behind: offers it posted (and their
+    # claims by others) go, and so do its claims on surviving offers.
+    await db.upsert_agent(temp_db, "poster", "[]")
+    await db.upsert_agent(temp_db, "alice", "[]")
+    my_offer = (await db.post_offer(temp_db, "poster", "mine"))["offer_id"]
+    await _age_broadcast_cooldown(temp_db)
+    their_offer = (await db.post_offer(temp_db, "alice", "theirs"))["offer_id"]
+    await db.claim_offer(temp_db, "alice", my_offer)
+    await db.claim_offer(temp_db, "poster", their_offer)
+
+    res = await db.delete_agent(temp_db, "poster", purge_messages=True)
+    assert res["offers_deleted"] == 1
+
+    remaining = await db.list_offers(temp_db)
+    assert [o["id"] for o in remaining] == [their_offer]
+    assert remaining[0]["claims"] == []  # poster's claim on alice's offer is gone too
+
+    # Non-purge delete leaves the board intact.
+    await db.delete_agent(temp_db, "alice", purge_messages=False)
+    assert [o["id"] for o in await db.list_offers(temp_db)] == [their_offer]
+
+@pytest.mark.asyncio
+async def test_ordinary_task_failure_leaves_board_alone(temp_db):
+    # The re-open hook must be a no-op for tasks that are not job-board assignments.
+    await db.upsert_agent(temp_db, "poster", "[]")
+    await db.upsert_agent(temp_db, "alice", "[]")
+    offer_id = (await db.post_offer(temp_db, "poster", "work"))["offer_id"]
+
+    msg = await db.enqueue_message(temp_db, "poster", "alice", "unrelated task")
+    await db.claim_pending(temp_db, "alice")
+    await db.fail_message(temp_db, msg["message_id"], "nope")
+    assert (await db.list_offers(temp_db))[0]["status"] == "open"
