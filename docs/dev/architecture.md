@@ -51,7 +51,7 @@ from fastmcp import FastMCP
 from fastapi import FastAPI
 
 mcp = FastMCP("MCP Agent Hub")
-# ... register the 9 @mcp.tool functions and mcp.add_middleware(AgentTracker()) ...
+# ... register the 10 @mcp.tool functions and mcp.add_middleware(AgentTracker()) ...
 
 mcp_app = mcp.http_app(path="/mcp")          # http_app(), not the old streamable_http_app()
 # Combine the MCP lifespan with the hub's own startup (open WAL conn, optional reclaim backstop):
@@ -62,7 +62,7 @@ app.mount("/mcp", mcp_app)                    # dashboard routes + /api/state li
 > **Lifespan gotcha:** the MCP app manages its own session/task group via a lifespan. When mounting onto FastAPI you **must** wire the MCP app's lifespan into FastAPI's `lifespan` (e.g. via FastMCP's `combine_lifespans`), or tool calls fail at runtime with errors like "task group is not initialized." Bind the server to `127.0.0.1` only.
 
 ### 1a. Cross-cutting Middleware
-A single FastMCP middleware (`on_call_tool` hook) centralizes concerns that would otherwise be copy-pasted into all 9 tools (see `design-decisions.md`, D14):
+A single FastMCP middleware (`on_call_tool` hook) centralizes concerns that would otherwise be copy-pasted into all 10 tools (see `design-decisions.md`, D14):
 * **`last_seen` refresh** — read the **direct actor arg where present** — `agent_id` (`register`/`check_inbox`/`disconnect`) or `sender_id` (`send_message`) — and `touch_last_seen`; the `message_id`-only tools (`reply`/`fail`/`request_input`/`check_status`) and `list_agents` are **not** refreshed (they're called moments after a fresh claim, or carry no caller identity) — `design-decisions.md`, D23. The non-MCP `GET /api/peek` route (which bypasses this middleware) **also** `touch_last_seen`s the queried agent — AHB-3/D29. v1 has no auth.
 * **Structured per-call logging** — append one event to an **in-memory ring buffer** (last ~200: tool name, args summary, timestamp, outcome, acting agent) that the dashboard's Activity panel reads via `/api/state` (D22); also emit it to stdout as a structured log. The message-id-only tools carry no actor arg, so their agent is resolved from the message row for **display only** (not `last_seen` — D23 stands), rather than logged as "System" (AHB-14).
 
@@ -77,11 +77,12 @@ An **optional, client-side** layer that makes pull-based delivery feel push-like
 ### 2. The Database Layer (`db.py`)
 Encapsulates all SQLite interactions; called by both the FastAPI routes (to read) and the FastMCP tools (to mutate). Uses WAL mode, short-lived connections (with `check_same_thread` handled), and runs blocking calls off the event loop via **`aiosqlite`** (D21) so DB I/O does not stall async handlers — and so the long-poll never holds a threadpool worker.
 * `upsert_agent(id, skills, description)` (skills stored as JSON, D16), `get_all_agents()`, `set_agent_offline(id)`, `touch_last_seen(id)`
-* `enqueue_message(...)` — sets `session_id` (minted or supplied), optional `parent_id`/`kind`, and `flagged_stale` when the recipient is stale (D6/Q8)
-* `claim_pending(agent_id)` — the atomic `UPDATE ... RETURNING` claim (claims `pending` rows incl. `input_request` kind; **skips `input_required` parked rows**; a `kind='result'` row is delivered and marked `completed` in the same claim — no ack, D20)
+* `enqueue_message(...)` — sets `session_id` (minted or supplied), optional `parent_id`/`kind`, and `flagged_stale` when the recipient is stale (D6/Q8); `internal=True` bypasses the offline/unknown-recipient guard for hub-generated fan-out (D30/AHB-11)
+* `broadcast(sender_id, payload, ...)` — one-to-many fan-out: caps-check → multi-row `INSERT` of a `kind='announcement'` to every non-offline agent (sender included, BD5) → `broadcasts` audit row, all in one transaction; enforces the per-sender flood caps against the durable `broadcasts` table (AHB-1 P1)
+* `claim_pending(agent_id)` — the atomic `UPDATE ... RETURNING` claim (claims `pending` rows incl. `input_request` kind; **skips `input_required` parked rows**; an **ack-less** row — `kind` in `NO_ACK_KINDS` = `{result, failure, announcement}` — is delivered and marked `completed` in the same claim, no ack, D20/D31/AHB-1)
 * `reclaim_stale(visibility_timeout)` — reverts unacked `in_progress` back to `pending` (never touches parked `input_required` rows)
 * `peek_inbox(agent_id)` — **read-only** count + sender summary of what `claim_pending` *would* return (incl. `result` notifications; backs the `/api/peek` hook endpoint, D19); claims/mutates nothing
-* `expire_messages(message_ttl)` — sweeps `pending` rows of **`kind='task'`** older than the TTL to the terminal `expired` state (D6/Q3/D24); never touches `input_request`/`result` derived messages or parked `input_required`
+* `expire_messages(message_ttl)` — sweeps `pending` rows of **`kind IN ('task','announcement')`** older than the TTL to the terminal `expired` state (D6/Q3/D24; announcements added in AHB-1); never touches `input_request`/`result`/`failure` derived messages or parked `input_required`
 * `request_input(message_id, question)` — parks the task as `input_required` and enqueues the child `input_request` message (D17)
 * `complete_message(id, response)` — marks `completed`, then runs two fan-out rules: the **un-park rule** — if the completed row is an `input_request`, flip its `parent_id` task from `input_required` back to `pending` and append the answer to the parent's `context` (D17); and the **result fan-out** — if the completed row is a `task`, enqueue a `kind='result'` message (carrying `response`) to its `sender_id`'s inbox, threaded by `session_id`/`parent_id` (D20)
 * `fail_message(id, error)`, `get_status(message_id)` (surfaces the pending `question` when `input_required`)

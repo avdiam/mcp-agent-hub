@@ -4,7 +4,7 @@ import asyncio
 from httpx import ASGITransport, AsyncClient
 
 from mcp_hub.hub import app, DB_PATH
-from mcp_hub.hub import register_agent, send_message, check_inbox, reply_to_message, check_status, request_input
+from mcp_hub.hub import register_agent, send_message, check_inbox, reply_to_message, check_status, request_input, broadcast_message
 import mcp_hub.db as db
 
 @pytest_asyncio.fixture
@@ -162,6 +162,33 @@ async def test_api_reset(test_client):
     status = await db.get_status(hub.DB_PATH, msg["message_id"])
     assert status["status"] == "pending"
     assert status["claimed_at"] is None
+
+@pytest.mark.asyncio
+async def test_broadcast_message_tool():
+    # AHB-1 P1: broadcast_message fans an ack-less announcement to all connected agents.
+    await register_agent("caster", [], "Caster")
+    await register_agent("listener", [], "Listener")
+
+    res = await broadcast_message("caster", "team standup in 5", subject="standup")
+    assert res["ok"] is True
+    assert set(res["recipients"]) == {"caster", "listener"}  # BD5: sender echoed
+    assert res["delivered"] == 2
+
+    inbox = await check_inbox("listener", wait=False)
+    assert len(inbox) == 1
+    assert inbox[0]["kind"] == "announcement"
+    assert inbox[0]["payload"] == "team standup in 5"
+    # Ack-less: no reply/fail, and it is not redelivered.
+    assert await check_inbox("listener", wait=False) == []
+
+@pytest.mark.asyncio
+async def test_broadcast_message_cap_error():
+    # A cap violation returns a clean structured error, not a raw exception.
+    await register_agent("caster", [], "Caster")
+    res = await broadcast_message("caster", "x" * 5000)  # exceeds the 4096-byte payload cap
+    assert res["ok"] is False
+    assert "payload" in res["error"]
+    assert res["delivered"] == 0
 
 @pytest.mark.asyncio
 async def test_tunables_are_single_source():

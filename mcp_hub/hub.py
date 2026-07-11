@@ -189,6 +189,23 @@ async def send_message(sender_id: str, recipient_id: str, payload: str, context:
     return await db.enqueue_message(DB_PATH, sender_id, recipient_id, payload, context, session_id, subject=subject)
 
 @mcp.tool()
+async def broadcast_message(sender_id: str, payload: str, subject: str | None = None, context: str | None = None) -> dict:
+    """
+    Broadcast one announcement to ALL currently connected agents at once (yourself included).
+    Use this for something every peer should see — a status update, an offer, a heads-up — NOT
+    for addressing one agent (use send_message for that). Announcements are informational and
+    ack-less: recipients read them via check_inbox and must NOT reply_to_message / fail_message.
+    Flood-capped per sender (a short cooldown, an hourly limit, and payload/subject size limits);
+    a violation delivers nothing and returns {"ok": false, "error": ...}. On success returns
+    {"ok": true, "broadcast_id", "delivered", "recipients", "skipped_offline", ...}.
+    """
+    try:
+        result = await db.broadcast(DB_PATH, sender_id, payload, subject=subject, context=context)
+        return {"ok": True, **result}
+    except ValueError as e:
+        return {"ok": False, "error": str(e), "delivered": 0}
+
+@mcp.tool()
 async def check_inbox(agent_id: str, wait: bool = True, timeout: int = 30) -> list[dict]:
     """
     Check your inbox for new tasks, clarification requests, task results, or task failures.

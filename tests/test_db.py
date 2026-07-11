@@ -424,3 +424,108 @@ async def test_get_message_endpoints(temp_db):
         "recipient_id": "worker",
     }
     assert await db.get_message_endpoints(temp_db, "does-not-exist") is None
+
+# --- AHB-1 P1: broadcast / announce ---
+
+@pytest.mark.asyncio
+async def test_broadcast_fans_out_online_and_stale_includes_sender_skips_offline(temp_db):
+    # BD3 + BD5: a broadcast reaches every non-offline agent INCLUDING the sender, and skips
+    # explicitly-offline peers; stale recipients are flagged like any queued send.
+    await db.upsert_agent(temp_db, "sender", "[]")
+    await db.upsert_agent(temp_db, "online_peer", "[]")
+    await db.upsert_agent(temp_db, "stale_peer", "[]")
+    await db.upsert_agent(temp_db, "offline_peer", "[]")
+    async with aiosqlite.connect(temp_db) as conn:
+        await conn.execute("UPDATE agents SET last_seen=? WHERE id=?", (time.time() - 200, "stale_peer"))
+        await conn.commit()
+    await db.set_agent_offline(temp_db, "offline_peer")
+
+    res = await db.broadcast(temp_db, "sender", "hello all", subject="notice")
+    assert res["delivered"] == 3
+    assert set(res["recipients"]) == {"sender", "online_peer", "stale_peer"}
+    assert res["skipped_offline"] == 1
+    assert res["skipped_over_cap"] == 0
+
+    expected_stale = {"stale_peer": 1}
+    for who in ("sender", "online_peer", "stale_peer"):
+        inbox = await db.claim_pending(temp_db, who)
+        assert len(inbox) == 1
+        assert inbox[0]["kind"] == "announcement"
+        assert inbox[0]["payload"] == "hello all"
+        assert inbox[0]["subject"] == "notice"
+        assert inbox[0]["flagged_stale"] == expected_stale.get(who, 0)
+    assert await db.claim_pending(temp_db, "offline_peer") == []
+
+    async with aiosqlite.connect(temp_db) as conn:
+        async with conn.execute(
+            "SELECT sender_id, recipient_count FROM broadcasts WHERE id=?", (res["broadcast_id"],)
+        ) as cursor:
+            row = await cursor.fetchone()
+            assert row is not None and row[0] == "sender" and row[1] == 3
+
+@pytest.mark.asyncio
+async def test_broadcast_announcement_is_ack_less(temp_db):
+    # BD2: an announcement auto-completes on claim (like a result) — no reply, no redelivery.
+    await db.upsert_agent(temp_db, "sender", "[]")
+    await db.upsert_agent(temp_db, "peer", "[]")
+    await db.broadcast(temp_db, "sender", "ping")
+
+    claimed = await db.claim_pending(temp_db, "peer")
+    assert len(claimed) == 1 and claimed[0]["kind"] == "announcement"
+    async with aiosqlite.connect(temp_db) as conn:
+        async with conn.execute("SELECT status FROM messages WHERE id=?", (claimed[0]["id"],)) as cursor:
+            assert (await cursor.fetchone())[0] == "completed"
+    assert await db.claim_pending(temp_db, "peer") == []
+
+@pytest.mark.asyncio
+async def test_broadcast_payload_cap_rejects_and_inserts_nothing(temp_db):
+    # A cap violation is all-or-nothing: raise, and write neither messages nor an audit row.
+    await db.upsert_agent(temp_db, "sender", "[]")
+    await db.upsert_agent(temp_db, "peer", "[]")
+    with pytest.raises(ValueError, match="payload"):
+        await db.broadcast(temp_db, "sender", "x" * (db.BROADCAST_MAX_PAYLOAD + 1))
+    async with aiosqlite.connect(temp_db) as conn:
+        async with conn.execute("SELECT COUNT(*) FROM messages") as cursor:
+            assert (await cursor.fetchone())[0] == 0
+        async with conn.execute("SELECT COUNT(*) FROM broadcasts") as cursor:
+            assert (await cursor.fetchone())[0] == 0
+
+@pytest.mark.asyncio
+async def test_broadcast_subject_cap_rejects(temp_db):
+    await db.upsert_agent(temp_db, "sender", "[]")
+    with pytest.raises(ValueError, match="subject"):
+        await db.broadcast(temp_db, "sender", "hi", subject="s" * (db.BROADCAST_MAX_SUBJECT + 1))
+
+@pytest.mark.asyncio
+async def test_broadcast_cooldown_rejects_second(temp_db):
+    await db.upsert_agent(temp_db, "sender", "[]")
+    await db.broadcast(temp_db, "sender", "first")
+    with pytest.raises(ValueError, match="cooldown"):
+        await db.broadcast(temp_db, "sender", "second")
+    async with aiosqlite.connect(temp_db) as conn:
+        async with conn.execute("SELECT COUNT(*) FROM broadcasts") as cursor:
+            assert (await cursor.fetchone())[0] == 1  # only the first was recorded
+
+@pytest.mark.asyncio
+async def test_broadcast_hourly_cap_rejects(temp_db):
+    # Override the cooldown to 0 to isolate the hourly cap; small cap keeps it fast.
+    await db.upsert_agent(temp_db, "sender", "[]")
+    for i in range(3):
+        await db.broadcast(temp_db, "sender", f"m{i}", min_interval=0, hourly_cap=3)
+    with pytest.raises(ValueError, match="hourly"):
+        await db.broadcast(temp_db, "sender", "over", min_interval=0, hourly_cap=3)
+
+@pytest.mark.asyncio
+async def test_broadcast_unclaimed_announcement_expires(temp_db):
+    # AHB-1 extends the D24 sweep to unclaimed announcements so they don't linger forever.
+    await db.upsert_agent(temp_db, "sender", "[]")
+    await db.upsert_agent(temp_db, "peer", "[]")
+    await db.broadcast(temp_db, "sender", "old news")
+    async with aiosqlite.connect(temp_db) as conn:
+        await conn.execute("UPDATE messages SET created_at=?", (time.time() - 90000,))
+        await conn.commit()
+    await db.expire_messages(temp_db, message_ttl=86400)
+    async with aiosqlite.connect(temp_db) as conn:
+        async with conn.execute("SELECT DISTINCT status FROM messages WHERE kind='announcement'") as cursor:
+            statuses = [r[0] for r in await cursor.fetchall()]
+    assert statuses == ["expired"]

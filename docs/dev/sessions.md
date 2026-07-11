@@ -2,6 +2,47 @@
 
 > Append-only log of what was accomplished each session. Pairs with `tasks.md` (what's left). This project travels between two PCs and uses **no local Claude memories** — this file is the durable record. Newest session first.
 
+## 2026-07-11 (later 3) — AHB-1 P1 shipped (D33): broadcast / announce with flood caps
+
+Directed follow-up: **build AHB-1 P1** (broadcast-to-connected MVP). Fully additive — the two
+prerequisites this build needed were already in place from earlier today (the AHB-11 `internal=True`
+bypass = BD3; the AHB-13 `NO_ACK_KINDS` generalization = BD2). `pytest` **35/35** (26 → +9).
+
+- **New 10th MCP tool `broadcast_message(sender_id, payload, subject?, context?)` → `db.broadcast`.**
+  Fans one **`kind="announcement"`** to **every non-offline agent, the sender included** (BD5 echo),
+  skipping explicitly-offline peers (BD3), in a **single multi-row transaction** (`executemany` +
+  audit row, under `@retry_on_lock`). Returns `{ok, broadcast_id, delivered, recipients,
+  skipped_offline, skipped_over_cap}`; on a cap violation the tool returns `{ok: false, error,
+  delivered: 0}` (clean structured error, not a raw exception).
+- **Ack-less (BD2).** Added `announcement` to `NO_ACK_KINDS = (result, failure, announcement)`, so
+  `claim_pending` auto-completes it on claim — recipients read + surface it, never `reply`/`fail`.
+- **Flood caps (BD4 — open-to-all-bounded-by-caps, no allowlist), all enforced in `db.broadcast`,
+  all-or-nothing on violation:** payload 4 KB, subject 120 ch, 30 s cooldown, 10/hour, 200-recipient
+  ceiling. Source of truth is a new **durable `broadcasts` audit table** (`id, sender_id, subject,
+  payload, recipient_count, created_at` + `(sender_id, created_at)` index) — durable so the rate
+  limit survives restarts (an in-memory bucket would reopen the abuse window every boot). Caps live
+  in `db.py` per the D32 single-source precedent (kwargs defaulting to module constants).
+- **TTL sweep extended.** `expire_messages` now sweeps `kind IN ('task','announcement')` so a
+  never-claimed announcement doesn't linger (D24 carve-out for `input_request`/`result`/`failure`
+  preserved — they have dependents or are bounded).
+- **Recipient ceiling never silently truncates:** if eligible > 200 (unreachable on a localhost hub),
+  serve the most-recently-active first and report `skipped_over_cap` in the result.
+- **Dashboard:** added a sky **ANNOUNCE** kind badge + "Announcement" title (else `getKindBadge`
+  default mislabels it TASK).
+- **Design choice:** distinct `kind="announcement"` over reusing `result` (conflates "your task's
+  outcome" with "a broadcast"; a distinct kind badges + reads cleanly and the SKILL already treated
+  unknown kinds as read-only). **P1 reaches only the connected set** — durable announcements for late
+  joiners (P2/BD6) deferred.
+- **Tests (9 new):** `test_db.py` — fan-out reaches online+stale+sender / skips offline / audit row;
+  ack-less auto-complete; each cap (payload, subject, cooldown, hourly) rejects with nothing written;
+  unclaimed announcement expires. `test_mcp.py` — `broadcast_message` happy path (ack-less, no
+  redelivery) + cap-error returns `{ok: false}`. Verified 10 tools registered.
+- **Docs:** **D33** in `design-decisions.md` (+ footer); `specs.md` (tool #4 with renumber, `announcement`
+  kind + `broadcasts` table in schema, atomic-claim `NO_ACK_KINDS`, a broadcast delivery bullet);
+  `architecture.md` (10 tools, `broadcast()`/`expire_messages` helper notes); `AGENTS.md` (broadcast
+  convention); `README.md` (tool blurb); `SKILL.md` (explicit `announcement` bullet + how to send one);
+  `agent-hub-issues.md` AHB-1 → **P1 fixed**; `tasks.md` roadmap (P2 is next).
+
 ## 2026-07-11 (later 2) — AHB-14 fixed (D32): tunables single-sourced + activity-feed attribution
 
 Directed follow-up: **the AHB-14 hardening pass.** Two substantive items fixed, one watch-item

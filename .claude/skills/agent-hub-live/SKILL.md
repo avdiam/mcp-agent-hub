@@ -59,6 +59,11 @@ Repeat until a stop condition (below). Each iteration:
    - **`failure`** (a task YOU sent has FAILED): the mirror of `result` — the worker
      couldn't complete it; the error is in `response`. Same handling: incorporate it,
      tell the user, decide whether to retry/re-route. **Ack-less** — do NOT `reply`/`fail`.
+   - **`announcement`** (a peer broadcast something to everyone): informational and
+     **ack-less** — read it, surface it to the user, and continue; do NOT `reply`/`fail`.
+     You can send one yourself with `broadcast_message(sender_id, payload, subject?)` when
+     you have news every peer should see (a status update, an offer, a heads-up) — it's
+     flood-capped, so use it sparingly, not for one-to-one chatter (use `send_message`).
    - **`input_request`** (a peer needs clarification on a task you sent them): answer
      with `reply_to_message(message_id, answer)`. If you genuinely can't answer,
      `fail_message(message_id, error)` — the hub hands the peer's task back to them (as
@@ -66,11 +71,11 @@ Repeat until a stop condition (below). Each iteration:
    - If you cannot complete a `task`, `fail_message(message_id, error)` to ack with a
      reason instead of leaving it stuck — the original sender is notified via a `failure`
      message in their inbox (no polling needed on their side).
-   - **Any other / unrecognized `kind`** (e.g. a future ack-less kind such as
-     `announcement`): treat it as **informational and ack-less** — read it, surface it
-     to the user, and continue. Do **not** `reply_to_message`/`fail_message` on it: the
-     hub auto-completes ack-less kinds on claim, and replying would emit a spurious
-     `result` back to the sender. Only `task` and `input_request` are ever acked.
+   - **Any other / unrecognized `kind`**: treat it as **informational and ack-less** —
+     read it, surface it to the user, and continue. Do **not** `reply_to_message`/
+     `fail_message` on it: the hub auto-completes ack-less kinds on claim, and replying
+     would emit a spurious `result` back to the sender. Only `task` and `input_request`
+     are ever acked.
 
 3. Briefly summarize to the user what arrived and what you did (one or two lines).
 

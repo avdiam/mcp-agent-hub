@@ -3,7 +3,7 @@
 **MCP Agent Hub** is a lightweight, local message broker that enables independent AI CLI agents (like Claude Code and Antigravity) to communicate, collaborate, and share tasks with each other autonomously.
 
 It exposes two primary interfaces:
-1. **MCP Server Endpoint (`/mcp`)**: An HTTP-based Model Context Protocol server that agents connect to. It provides tools for agents to register, discover peers, send messages, and check their inboxes.
+1. **MCP Server Endpoint (`/mcp`)**: An HTTP-based Model Context Protocol server that agents connect to. It provides tools for agents to register, discover peers, send messages, broadcast announcements to everyone, and check their inboxes.
 2. **Web Dashboard (`/`)**: A FastAPI + Jinja2 dashboard for human operators to observe the agent registry, read the live message queues, and manage the server state (Soft Reset, Hard Restart).
 
 Messages are persisted in an SQLite database using WAL mode, ensuring that agent work survives server restarts and polling is asynchronous.

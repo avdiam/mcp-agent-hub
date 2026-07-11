@@ -11,12 +11,11 @@ if sqlite3.sqlite_version_info < (3, 35):
     raise RuntimeError(f"SQLite >= 3.35 is required. Found: {sqlite3.sqlite_version}")
 
 # Kinds that auto-complete the instant they are claimed (ack-less): the recipient never
-# reply/fail's them, so claim_pending marks them 'completed' on the way out. These are the
-# hub-generated fan-outs that report the fate of a task YOU sent:
-#   result  = the task succeeded (D20)
-#   failure = the task failed     (AHB-13 #3)
-# AHB-1's announcement kind will join this set when broadcast lands.
-NO_ACK_KINDS = ("result", "failure")
+# reply/fail's them, so claim_pending marks them 'completed' on the way out.
+#   result       = a task YOU sent succeeded (D20)
+#   failure      = a task YOU sent failed    (AHB-13 #3)
+#   announcement = a broadcast delivered to everyone (AHB-1 BD2 — informational, no reply)
+NO_ACK_KINDS = ("result", "failure", "announcement")
 
 # Tunable queue constants — the single source of truth. hub.py imports these (rather than
 # redefining them) so tuning one here can't silently desync the DB logic from the server
@@ -24,6 +23,15 @@ NO_ACK_KINDS = ("result", "failure")
 STALE_THRESHOLD = 90       # seconds since last_seen before a queued recipient is flagged stale
 VISIBILITY_TIMEOUT = 600   # seconds an in_progress claim is held before it's eligible for redelivery
 MESSAGE_TTL = 86400        # seconds a pending task lingers before the sweep marks it expired
+
+# Broadcast flood caps (AHB-1 P1). A violation raises ValueError and inserts NOTHING
+# (all-or-nothing). Enforced inside db.broadcast so the DB stays the single source of truth
+# (per the D32/AHB-14 precedent); each is overridable per-call via the matching keyword arg.
+BROADCAST_MAX_PAYLOAD = 4096    # bytes (UTF-8) — max broadcast body
+BROADCAST_MAX_SUBJECT = 120     # characters — max broadcast subject
+BROADCAST_MIN_INTERVAL = 30     # seconds — per-sender cooldown between broadcasts
+BROADCAST_HOURLY_CAP = 10       # broadcasts per sender per rolling hour
+BROADCAST_MAX_RECIPIENTS = 200  # safety ceiling on fan-out size per broadcast
 
 
 
@@ -99,7 +107,21 @@ async def init_db(db_path="hub.db"):
         await db.execute("CREATE INDEX IF NOT EXISTS idx_msgs_recipient_status ON messages(recipient_id, status)")
         await db.execute("CREATE INDEX IF NOT EXISTS idx_msgs_session ON messages(session_id)")
         await db.execute("CREATE INDEX IF NOT EXISTS idx_msgs_created_at ON messages(created_at)")
-        
+
+        # Broadcast audit log (AHB-1 P1). Doubles as the durable rate-limit source (survives
+        # restarts, unlike an in-memory bucket): db.broadcast reads it to enforce the caps.
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS broadcasts (
+                id TEXT PRIMARY KEY,
+                sender_id TEXT,
+                subject TEXT,
+                payload TEXT,
+                recipient_count INTEGER,
+                created_at REAL
+            )
+        """)
+        await db.execute("CREATE INDEX IF NOT EXISTS idx_broadcasts_sender_created ON broadcasts(sender_id, created_at)")
+
         await db.commit()
 
 @retry_on_lock()
@@ -190,6 +212,89 @@ async def enqueue_message(db_path, sender_id, recipient_id, payload, context=Non
         await db.commit()
     
     return {"message_id": message_id, "session_id": session_id}
+
+@retry_on_lock()
+async def broadcast(db_path, sender_id, payload, subject=None, context=None,
+                    max_payload=BROADCAST_MAX_PAYLOAD, max_subject=BROADCAST_MAX_SUBJECT,
+                    min_interval=BROADCAST_MIN_INTERVAL, hourly_cap=BROADCAST_HOURLY_CAP,
+                    max_recipients=BROADCAST_MAX_RECIPIENTS, stale_threshold=STALE_THRESHOLD):
+    """Fan one announcement out to every connected agent (AHB-1 P1).
+
+    Delivers a kind='announcement' message (ack-less; auto-completed on claim, NO_ACK_KINDS)
+    to all non-offline agents INCLUDING the sender (BD5 echo), skipping explicitly-offline
+    peers (BD3). Flood-capped per sender via the durable `broadcasts` audit table; a cap
+    violation raises ValueError and inserts NOTHING (all-or-nothing). Returns delivery counts
+    and the broadcast_id. One multi-row transaction under @retry_on_lock.
+    """
+    # Size caps first — cheap, and reject before opening a connection.
+    if payload is not None and len(payload.encode("utf-8")) > max_payload:
+        raise ValueError(f"Broadcast payload exceeds the {max_payload}-byte limit")
+    if subject is not None and len(subject) > max_subject:
+        raise ValueError(f"Broadcast subject exceeds the {max_subject}-character limit")
+
+    broadcast_id = str(uuid.uuid4())
+    now = time.time()
+
+    async with _connect(db_path) as db:
+        # Rate limits, read from the durable audit log (survives restarts).
+        async with db.execute(
+            "SELECT COUNT(*) AS n, MAX(created_at) AS last_at FROM broadcasts WHERE sender_id=? AND created_at > ?",
+            (sender_id, now - 3600),
+        ) as cursor:
+            rl = await cursor.fetchone()
+        if rl["last_at"] is not None and (now - rl["last_at"]) < min_interval:
+            wait = int(min_interval - (now - rl["last_at"])) + 1
+            raise ValueError(f"Broadcast cooldown active — wait ~{wait}s before broadcasting again")
+        if (rl["n"] or 0) >= hourly_cap:
+            raise ValueError(f"Broadcast hourly cap reached ({hourly_cap}/hour) — try again later")
+
+        # Eligible recipients: every non-offline agent (online + stale), the sender included (BD5).
+        async with db.execute("SELECT id, last_seen, status FROM agents") as cursor:
+            agents = await cursor.fetchall()
+        skipped_offline = sum(1 for a in agents if a["status"] == "offline")
+        eligible = [a for a in agents if a["status"] != "offline"]
+
+        # Safety ceiling: never fan out to more than max_recipients. Realistically unreachable
+        # on a localhost hub; if hit, serve the most-recently-active first and report the drop
+        # (never silently — AHB-1 caps note).
+        skipped_over_cap = 0
+        if len(eligible) > max_recipients:
+            eligible.sort(key=lambda a: a["last_seen"] or 0, reverse=True)
+            skipped_over_cap = len(eligible) - max_recipients
+            eligible = eligible[:max_recipients]
+
+        rows = [
+            (
+                str(uuid.uuid4()), broadcast_id, None, "announcement", sender_id, a["id"],
+                payload, context, None, "pending",
+                1 if (a["last_seen"] is not None and now - a["last_seen"] > stale_threshold) else 0,
+                now, now, subject,
+            )
+            for a in eligible
+        ]
+        if rows:
+            await db.executemany("""
+                INSERT INTO messages (
+                    id, session_id, parent_id, kind, sender_id, recipient_id,
+                    payload, context, response, status, flagged_stale, created_at, updated_at, subject
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, rows)
+
+        # Audit row (also the rate-limit source) — recorded even on a zero-recipient broadcast,
+        # so broadcasting into an empty hub still counts against the caps.
+        await db.execute(
+            "INSERT INTO broadcasts (id, sender_id, subject, payload, recipient_count, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+            (broadcast_id, sender_id, subject, payload, len(rows), now),
+        )
+        await db.commit()
+
+    return {
+        "broadcast_id": broadcast_id,
+        "delivered": len(rows),
+        "recipients": [a["id"] for a in eligible],
+        "skipped_offline": skipped_offline,
+        "skipped_over_cap": skipped_over_cap,
+    }
 
 @retry_on_lock()
 async def claim_pending(db_path, agent_id, visibility_timeout=VISIBILITY_TIMEOUT):
@@ -393,10 +498,13 @@ async def expire_messages(db_path, message_ttl=MESSAGE_TTL):
     async with _connect(db_path) as db:
         now = time.time()
         cutoff = now - message_ttl
+        # Sweep unclaimed 'task' AND 'announcement' rows (D24, extended by AHB-1). Both have no
+        # dependent parent, so expiring them strands nothing; a never-claimed announcement must
+        # not linger forever. input_request/result/failure stay excluded (D24 carve-out).
         await db.execute("""
-            UPDATE messages 
-            SET status = 'expired', updated_at = ? 
-            WHERE status = 'pending' AND kind = 'task' AND created_at < ?
+            UPDATE messages
+            SET status = 'expired', updated_at = ?
+            WHERE status = 'pending' AND kind IN ('task', 'announcement') AND created_at < ?
         """, (now, cutoff))
         await db.commit()
 

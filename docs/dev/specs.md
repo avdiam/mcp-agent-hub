@@ -21,7 +21,7 @@ The system consists of two interfaces served from a single Python application:
 ### Reliable Message Brokering (at-least-once)
 * Messages are routed via a SQLite-backed queue that survives server or agent restarts.
 * State machine: `pending` → `in_progress` → `completed` / `failed`, plus a non-terminal **`input_required`** branch — a worker can pause `in_progress` work to ask the original sender a clarifying question (see *Multi-turn Clarification & Sessions* below; `design-decisions.md` D17). A `pending` `task` never claimed within `MESSAGE_TTL` is swept to the terminal **`expired`** state (`design-decisions.md` D6/Q3/D24).
-* **Atomic claim:** `check_inbox` claims an agent's `pending` messages in a single atomic statement (`UPDATE ... RETURNING`), flipping them to `in_progress` and stamping `claimed_at`. Concurrent callers never receive the same message twice. (A delivered **ack-less** notification — `kind` in `NO_ACK_KINDS` = `{result, failure}` — is marked `completed` in the same claim, needing no ack; D20/D31.)
+* **Atomic claim:** `check_inbox` claims an agent's `pending` messages in a single atomic statement (`UPDATE ... RETURNING`), flipping them to `in_progress` and stamping `claimed_at`. Concurrent callers never receive the same message twice. (A delivered **ack-less** notification — `kind` in `NO_ACK_KINDS` = `{result, failure, announcement}` — is marked `completed` in the same claim, needing no ack; D20/D31/AHB-1.)
 * **Explicit ack:** `reply_to_message` moves a message to `completed`; `fail_message` moves it to `failed`. Either one acks the claim. Both fan a notification back to the original sender's inbox — a `kind="result"` on success (D20), a `kind="failure"` on failure (D31) — so the sender never has to poll `check_status`.
 * **Visibility timeout / redelivery (lazy-on-claim):** an `in_progress` message not acked within `VISIBILITY_TIMEOUT` becomes eligible for redelivery — the atomic claim query grabs `pending` rows **and** `in_progress` rows whose `claimed_at` is older than the timeout, so a crashed/restarted worker's task is recovered the next time any consumer polls. No scheduler is required; an optional background loop is only a backstop for messages stranded while nobody polls (see `design-decisions.md`, D15). Delivery is therefore **at-least-once**, so message handlers should tolerate the occasional duplicate.
 * Senders receive a `message_id` (and the `session_id`). The task's outcome is **delivered back to the sender's inbox** via the same `check_inbox` long-poll — a `kind="result"` on success (D20) or a `kind="failure"` on failure (D31) — and also remains readable via `check_status` (the durable/secondary read).
@@ -38,6 +38,7 @@ The system consists of two interfaces served from a single Python application:
 * Recommended agent work-loop: `register_agent` → `check_inbox(wait=true)` → handle → `reply_to_message` → repeat.
 * **Result delivery (D20).** When a worker `reply_to_message`-completes a task, the hub enqueues a `kind="result"` message (carrying the response) to the **original sender's** inbox — so the requester learns the answer through its normal `check_inbox` long-poll (and the D19 hook peek nudges for it too) instead of spin-polling `check_status`. Best-effort: the result is marked `completed` in the same claim (no ack); the authoritative response stays on the task row for `check_status`.
 * **Failure delivery (D31/AHB-13).** Symmetrically, when a worker `fail_message`-fails a task, the hub enqueues a **`kind="failure"`** message (carrying the error) to the same inbox on the same channel — closing the D20 gap where the "results reach you via your inbox, no status-polling needed" contract held only for success. Same ack-less, best-effort, internal-delivery semantics as `result` (`NO_ACK_KINDS`), so a departed sender doesn't drop it.
+* **Broadcast / announce (AHB-1 P1).** `broadcast_message` fans one **`kind="announcement"`** message out to **every non-offline agent, the sender included** (BD5), skipping explicitly-offline peers (BD3). It rides the same `check_inbox` long-poll + `/api/peek` nudge as everything else, is **ack-less** (`NO_ACK_KINDS` — auto-completed on claim, no `reply`/`fail`), and is **flood-capped per sender** via the durable `broadcasts` audit table (cooldown + hourly cap + payload/subject size + a recipient ceiling; a violation delivers nothing). **P1 reaches only the connected set** — durable announcements that also reach agents connecting *later* are P2 (BD6). Unclaimed announcements are swept to `expired` by the extended TTL sweep (D24/AHB-1) so they don't linger.
 * **Optional — hook peek/nudge layer (D19).** Both target clients expose lifecycle hooks (Claude Code: `Stop` / `UserPromptSubmit` / `SessionStart`; Antigravity `agy`: `StopHook` / `PreInvocationHook`, configured in `hooks.json`). A thin shipped script (`hook_peek.py`) calls the **read-only** `GET /api/peek?agent_id=…`, gets back a pending-count + sender summary, and injects a nudge ("you have N messages from X — call `check_inbox`") into the agent's context. The hook **peeks, never claims** — actual delivery and the ack still flow through `check_inbox` → `reply_to_message` / `fail_message`, so at-least-once is untouched. This makes delivery *feel* push-like (especially the Stop-hook variant, which keeps an agent in its loop rather than going idle) without coupling the hub to any client.
 * **`GET /api/peek?agent_id=…`** is a plain (non-MCP) read-only JSON endpoint on the FastAPI app, sharing `db.py` (no second DB opener). It returns `{ count, senders: [...] }` mirroring exactly what `check_inbox` *would* claim (claimable `pending` rows incl. `input_request`; excludes parked `input_required`), and **mutates no message state** (it never claims) — but it **does** refresh the queried agent's own `last_seen` (AHB-3/D29: peeking your own inbox keeps a hook-present session "online").
 * **Honest limit:** a hook fires only on a *trigger* (tool call, invocation, stop, prompt submit). A truly idle agent waiting on a human won't see mail until its next trigger — the same fundamental constraint long-poll has. Waking a fully idle agent (OS interrupt / writing to its stdin) is out of scope (terminal-hijacking).
@@ -50,7 +51,7 @@ The system consists of two interfaces served from a single Python application:
 
 ## 3. MCP Tool Definitions
 
-The FastMCP server exposes the following tools (**9 total** — `request_input` added for the `input_required` branch, D17):
+The FastMCP server exposes the following tools (**10 total** — `request_input` added for the `input_required` branch (D17); `broadcast_message` added for one-to-many announcements (AHB-1 P1)):
 
 1. `register_agent(agent_id: str, skills: list[Skill], description: str | None = None) -> str`
    * Registers the agent as online and refreshes `last_seen`.
@@ -64,26 +65,31 @@ The FastMCP server exposes the following tools (**9 total** — `request_input` 
    * `sender_id` is **recorded on the message** so `check_status` and the `input_required` round-trip (D17) can route back to the original requester. (Required corollary of D17; identity is unauthenticated per the trust model.)
    * **Validation:** rejects an unknown or explicitly-disconnected recipient; queues to a known-but-stale recipient **but sets `flagged_stale`** so the dashboard surfaces it (D6/Q8).
 
-4. `check_inbox(agent_id: str, wait: bool = True, timeout: int = 30) -> list[dict]`
+4. `broadcast_message(sender_id: str, payload: str, subject: str | None = None, context: str | None = None) -> dict`  *(new — AHB-1 P1)*
+   * Fans one **`kind="announcement"`** message out to **every non-offline agent, the sender included** (BD5 echo; explicitly-offline peers are skipped, BD3), reusing the normal `check_inbox` claim path. Announcements are **ack-less** — auto-completed on claim like `result`/`failure` (`NO_ACK_KINDS`), so recipients read and surface them but never `reply`/`fail`.
+   * **Flood-capped per sender** (enforced in `db.broadcast`, all-or-nothing on violation — nothing is written): payload ≤ `BROADCAST_MAX_PAYLOAD` (4096 B), subject ≤ `BROADCAST_MAX_SUBJECT` (120 chars), a `BROADCAST_MIN_INTERVAL` (30 s) cooldown, `BROADCAST_HOURLY_CAP` (10/h per sender), and a `BROADCAST_MAX_RECIPIENTS` (200) fan-out ceiling. The durable **`broadcasts` audit table** is the rate-limit source (survives restarts).
+   * Returns `{ ok, broadcast_id, delivered, recipients, skipped_offline, skipped_over_cap }` on success, or `{ ok: false, error, delivered: 0 }` on a cap violation. Authorization is **open to all registered agents, bounded by the caps** (BD4). **P1 reaches only the connected set**; durable announcements for late joiners are P2 (BD6).
+
+5. `check_inbox(agent_id: str, wait: bool = True, timeout: int = 30) -> list[dict]`
    * Atomically claims this agent's `pending` messages → `in_progress` (including `input_request` clarification messages and `kind="result"` notifications addressed to it; a `result` is delivered and marked `completed` in the same claim — no ack, D20). With `wait=True` (**the default** — D2), blocks up to `timeout` seconds for the first message to arrive, polling every `LONGPOLL_INTERVAL` (D21); `wait=False` is a cheap one-off check. Each returned message includes `session_id`, `parent_id`, and `kind`.
 
-5. `reply_to_message(message_id: str, response: str) -> str`
+6. `reply_to_message(message_id: str, response: str) -> str`
    * Marks a message `completed` and attaches the response text (acks the claim).
    * **Result fan-out (D20):** if the replied message is a `task`, completing it enqueues a `kind="result"` message (carrying `response`) to the **original sender's** inbox, threaded by `session_id`/`parent_id`, so the requester is notified through its own `check_inbox` loop. This fan-out is an **internal delivery** and **bypasses the online/offline recipient guard** (D30/AHB-11): a task that completed for a sender who has since gone offline or deregistered must not fail the worker's ack — the result is delivered best-effort to the (reconnectable) inbox.
    * **Un-park rule (D17, refined by D30):** if the replied message is an `input_request` (its `parent_id` points to a parked `input_required` task), completing it flips the parent back to `pending` and appends the answer to the parent's `context`, re-queuing it to the worker — **but only if the parent is still `input_required`**. A duplicate/late answer (at-least-once redelivery, or answering twice) is a no-op, so it can't revive an already-completed parent (AHB-12).
 
-6. `fail_message(message_id: str, error: str) -> str`
+7. `fail_message(message_id: str, error: str) -> str`
    * Marks a message `failed` with an error string (acks the claim). Completes the `failed` branch of the state machine.
    * **Failure fan-out (D31/AHB-13 #3):** if the failed message is a `task`, the hub enqueues a **`kind="failure"`** message (carrying `error`) to the **original sender's** inbox — the mirror of the D20 result fan-out, so a sender long-polling `check_inbox` learns of the failure instead of waiting to its idle cap (the live loop never falls back to `check_status`). Internal + ack-less (auto-completed on claim, like `result`), and it **bypasses the online/offline guard** (D30/AHB-11) so it survives a departed sender.
    * **Failed-clarification un-park (D31/AHB-13 #4):** if the failed message is an `input_request` (the sender can't/won't answer), its parked parent task is returned to **`pending`** with `[Clarification Failed]: <error>` appended to `context`, so the worker re-claims it and decides whether to proceed best-effort or `fail_message` the task itself — rather than the parent being stranded `input_required` forever (the D24 sweep never touches it there). Same idempotent `status='input_required'` gate as the D30 reply-un-park.
 
-7. `request_input(message_id: str, question: str) -> dict`  *(new — D17)*
+8. `request_input(message_id: str, question: str) -> dict`  *(new — D17)*
    * Called by the agent currently handling a claimed message when it needs clarification. Parks that message as `input_required` (not redelivered while parked) and enqueues a child `input_request` message (the `question`) back to the **original sender's** inbox, linked by `parent_id` + `session_id`. Returns `{ request_message_id, session_id }`.
 
-8. `check_status(message_id: str) -> dict`
+9. `check_status(message_id: str) -> dict`
    * Lets the original sender check status and read the response/error. When the message is `input_required`, also surfaces the pending `question` and its `request_message_id`. With D20/D31 the outcome is also pushed to the sender's inbox as a `kind="result"` (success) or `kind="failure"` (failure) message, so `check_status` is the **durable/secondary** read (poll it if you didn't catch the notification in your inbox).
 
-9. `disconnect_agent(agent_id: str) -> str`
+10. `disconnect_agent(agent_id: str) -> str`
    * Marks the agent `offline` in the registry.
 
 ## 4. Web Dashboard Specifications
@@ -96,7 +102,7 @@ The dashboard is served at `http://localhost:8000/` (live data via `/api/state`;
   * Timestamp
   * Sender -> Recipient
   * Status Badge (Pending, In Progress, **Input Required**, Completed, **Failed**, **Expired**)
-  * A **`kind`** indicator (task / **input_request** / **result** / **failure**) so clarification questions and result/failure notifications are distinguishable from tasks (D17/D20/D31).
+  * A **`kind`** indicator (task / **input_request** / **result** / **failure** / **announcement**) so clarification questions, result/failure notifications, and broadcasts are distinguishable from tasks (D17/D20/D31/AHB-1).
   * A **⚠ stale recipient** flag on messages sent to a stale agent (`flagged_stale`).
   * A button to view the full payload/response (and, for an `input_request`, the question) in a modal.
 * **Activity Panel (D22):** a live feed of recent tool calls (tool name, acting agent, outcome, timestamp), backed by an in-memory ring buffer (last ~200 events) — the observability goal's activity stream, surfaced via `/api/state`. The message-id-only tools (`reply_to_message`/`fail_message`/`request_input`/`check_status`) carry no `agent_id`/`sender_id`, so the actor is resolved from the message row **for display only** — `check_status` → the message's `sender_id`, the ack tools → its `recipient_id` — instead of showing "System" (AHB-14). This is display attribution only; `last_seen` still follows D23 (direct actor arg only).
@@ -114,7 +120,8 @@ Two unauthenticated, operator-only POST endpoints on the FastAPI app (localhost 
 * File: `hub.db`, created in the **current working directory** (`DB_PATH="hub.db"`). Always launch via `python run_hub.py` from the repo root so there is one canonical DB at the root (D27); launching from elsewhere would create/use a different `hub.db`.
 * Schema:
   * `agents` table: `id` (PK), `description` (TEXT, nullable), `skills` (TEXT / JSON), `status`, `last_seen`.
-  * `messages` table: `id` (PK), `session_id`, `parent_id` (nullable, threads `input_request`/`result`/`failure` → parent task), `kind` (`task` | `input_request` | `result` | `failure`, default `task`), `sender_id`, `recipient_id`, `payload`, `context`, `response`, `status` (`pending` | `in_progress` | `input_required` | `completed` | `failed` | `expired`), `flagged_stale` (INTEGER, default 0), `claimed_at`, `created_at`, `updated_at`.
+  * `messages` table: `id` (PK), `session_id`, `parent_id` (nullable, threads `input_request`/`result`/`failure` → parent task), `kind` (`task` | `input_request` | `result` | `failure` | `announcement`, default `task`), `sender_id`, `recipient_id`, `payload`, `context`, `response`, `status` (`pending` | `in_progress` | `input_required` | `completed` | `failed` | `expired`), `flagged_stale` (INTEGER, default 0), `claimed_at`, `created_at`, `updated_at`.
+  * `broadcasts` table (AHB-1 P1 audit log + durable rate-limit source): `id` (PK), `sender_id`, `subject`, `payload`, `recipient_count` (INTEGER), `created_at`. One row per `broadcast_message` call; `db.broadcast` reads it to enforce the per-sender cooldown + hourly cap.
   * Index on `messages(recipient_id, status)` for inbox queries; index on `messages(session_id)` for thread lookups; index on `messages(created_at)` for the dashboard's recent-messages ordering.
   * `skills` is serialized as JSON text (SQLite has no native array type).
 

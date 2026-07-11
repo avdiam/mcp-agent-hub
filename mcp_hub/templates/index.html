@@ -484,6 +484,7 @@
             if (m.subject && m.subject.trim()) return m.subject.trim();
             if (m.kind === 'result') return 'Task result';
             if (m.kind === 'failure') return 'Task failed';
+            if (m.kind === 'announcement') return 'Announcement';
             if (m.kind === 'input_request') return 'Clarification';
             let p = (m.payload || '').trim();
             if (!p) return '—';
@@ -800,6 +801,7 @@
             switch(kind) {
                 case 'result': return `<span class="bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 px-1.5 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider">RESULT</span>`;
                 case 'failure': return `<span class="bg-red-500/10 text-red-400 border border-red-500/20 px-1.5 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider">FAILURE</span>`;
+                case 'announcement': return `<span class="bg-sky-500/10 text-sky-400 border border-sky-500/20 px-1.5 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider">ANNOUNCE</span>`;
                 case 'input_request': return `<span class="bg-purple-500/10 text-purple-400 border border-purple-500/20 px-1.5 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider">CLARIFY</span>`;
                 default: return `<span class="bg-slate-500/10 text-slate-400 border border-slate-500/20 px-1.5 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider">TASK</span>`;
             }

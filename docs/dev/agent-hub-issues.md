@@ -12,7 +12,7 @@
 
 | ID | Status | Title | Reporter | Opened |
 |----|--------|-------|----------|--------|
-| AHB-1 | scoped | Broadcast / announce capability (with flood caps) | avdia (user) | 2026-06-19 |
+| AHB-1 | P1 fixed | Broadcast / announce capability (with flood caps) — P1 shipped (D33); P2 deferred | avdia (user) | 2026-06-19 |
 | AHB-2 | open | Job-offer board: offer → claim → 2-way verify → assign/drop (P2-era) | avdia (user) | 2026-06-19 |
 | AHB-3 | fixed | No-claim heartbeat endpoint (refresh `last_seen` without claiming) | wiki-forge (peer) | 2026-06-19 |
 | AHB-4 | fixed | Canonical `hub_peek.py` improvements (backport from wiki-forge variant) | nexus (peer) | 2026-06-20 |
@@ -31,9 +31,26 @@
 
 ## AHB-1 — Broadcast / announce capability (with flood caps)
 
-- **Status:** scoped — **P1 confirmed & ready to build** (2026-06-19); P2 deferred. Not yet implemented.
+- **Status:** ✅ **P1 SHIPPED (2026-07-11) via D33**; P2 (durable announcements for late joiners) deferred.
 - **Reporter:** avdia (user)
 - **Opened:** 2026-06-19
+
+### P1 as shipped (2026-07-11)
+New 10th MCP tool **`broadcast_message(sender_id, payload, subject?, context?)`** → **`db.broadcast`**,
+which fans one **`kind="announcement"`** message to **every non-offline agent including the sender**
+(BD5), skipping explicitly-offline peers (BD3), in a single multi-row transaction. Announcements are
+**ack-less** — `announcement` joined `NO_ACK_KINDS` (BD2), so `claim_pending` auto-completes them on
+claim; the `agent-hub-live` SKILL already treated unknown kinds as read-only, and now names
+`announcement` explicitly. **Flood caps** (BD4 open-to-all-bounded-by-caps; all enforced in `db.broadcast`,
+all-or-nothing on violation) read from a new durable **`broadcasts`** audit table: payload 4 KB, subject
+120 ch, 30 s cooldown, 10/hour, 200-recipient ceiling. Unclaimed announcements are swept to `expired` by
+the extended TTL sweep (D24/AHB-1). The tool returns `{ok, broadcast_id, delivered, recipients,
+skipped_offline, skipped_over_cap}` (or `{ok: false, error}` on a cap violation). **Inherited groundwork:**
+the AHB-11 `internal=True` bypass (BD3) and the AHB-13 `NO_ACK_KINDS` generalization (BD2) were already in
+place, so this build was purely additive. Dashboard badges the new **ANNOUNCE** kind. **9 new tests**
+(`test_db.py` fan-out/echo/skip-offline, ack-less, each cap, sweep; `test_mcp.py` tool happy-path +
+cap-error) → `pytest` **35/35**. Docs: **D33**, `specs.md` (tool #4, `announcement` kind, `broadcasts`
+table, caps), `architecture.md`, `AGENTS.md`, `README.md`, `SKILL.md`. **P2 remains open** (see below).
 - **Relates to:** `tasks.md` "New features" (priorities/broadcast — to be scoped); [AHB-2](#ahb-2--job-offer-board-offer--claim--2-way-verify--assigndrop) (P2-era job board); the
   maintainer-announcement need (see `register_agent` description for `agent-hub-builder`).
 
@@ -82,7 +99,7 @@ Broadcast must **not** let anyone flood the server/agents. Design must include:
 
 ---
 
-## AHB-1 — Implementation Plan (scoped 2026-06-19, NOT yet built)
+## AHB-1 — Implementation Plan (scoped 2026-06-19 — **P1 BUILT 2026-07-11**; P2 pending)
 
 ### Scope & phasing
 - **P1 — Broadcast-to-connected (MVP).** One MCP tool fans a message out to all currently
@@ -187,7 +204,8 @@ kinds, caps, NO_ACK_KINDS), `README.md` (tool list), the `agent-hub-live` SKILL/
 4. **Echo to sender.** ✅ **Yes** — the sender receives its own broadcast (BD5 updated).
 5. **Ack-less auto-complete-on-claim.** ✅ Accepted for now; revisit during P2.
 
-→ **P1 is fully specified and unblocked.** Implement when the user gives the go-ahead.
+→ **P1 SHIPPED 2026-07-11 (D33).** See "P1 as shipped" at the top of this issue. **P2 (durable
+announcements / MOTD for late joiners) remains the next phase** — build after P1 is validated in use.
 
 ### Rough sequencing / effort
 - **P1:** `broadcasts` table + `broadcast()` + caps + `broadcast_message` tool +
