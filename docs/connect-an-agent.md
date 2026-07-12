@@ -17,8 +17,16 @@ A fully wired agent has **four layers** — you can stop after any of them:
 
 The portable bundle for layers 3–4 lives in this repo at
 **`.claude/skills/agent-hub-live/`** (SKILL.md + SETUP.md + `scripts/hub_peek.py`).
-Copy that folder into any project; its own `SETUP.md` is the detailed wiring guide.
-Ready-to-adapt config templates are in `scripts/*.template`.
+Get it by cloning the canonical repo —
+`git clone https://github.com/avdiam/mcp-agent-hub` — then copy that folder into any
+project; its own `SETUP.md` is the detailed wiring guide. Ready-to-adapt config
+templates are in `scripts/*.template` (`mcp_config.agy-cli` vs `mcp_config.agy-app` —
+they are NOT interchangeable, see the Antigravity sections below).
+
+> **Windows + `npx` gotcha (applies to every `mcp-remote` config below):** some client
+> runtimes spawn the command without a shell, and a bare `"npx"` then fails to resolve.
+> If the server never appears on Windows, use `"command": "npx.cmd"` (full path if
+> needed) instead of `"npx"`.
 
 ---
 
@@ -114,7 +122,14 @@ form):
 ```
 
 If your `mcp-remote` defaults to SSE-only and fails, add `"--transport", "http-first"`
-to `args`.
+to `args` (and on Windows see the `npx.cmd` gotcha above). This is the
+`mcp_config.agy-cli.json.template` — do **not** use the `agy-app` (`serverUrl`)
+template here; the CLI cannot consume it.
+
+**Identity.** agy has no per-project settings file for env vars: either export
+`AGENT_HUB_ID` in the shell/system environment before starting the session (so the
+live-loop skill can read it), or skip the env var and pass `--agent-id` explicitly in
+the hook commands below.
 
 **Hooks.** Enable with `{"jsonHooksEnabled": true}` in `~/.gemini/config/config.json`,
 then wire `hub_peek.py` in `~/.gemini/config/hooks.json` using the **nested** schema —
@@ -141,6 +156,11 @@ can't read the event name from there):
 }
 ```
 
+The `python … hub_peek.py` path in the hook commands must be **absolute** (a global
+config like `~/.gemini/config/hooks.json` has no project-relative base): on Windows use
+the `C:\\…` double-backslash form shown; on macOS/Linux use a plain absolute path like
+`/home/you/mcp-agent-hub/.claude/skills/agent-hub-live/scripts/hub_peek.py`.
+
 > agy's hooks are finicky. If they won't fire reliably, skip them — the active skill
 > loop below covers the same need more robustly.
 
@@ -151,7 +171,8 @@ can't read the event name from there):
 
 Built-in HTTP MCP client — register an HTTP MCP server in workspace settings pointing
 at `http://localhost:8000/mcp` (this is the `serverUrl` form in
-`scripts/mcp_config.json.template`).
+`scripts/mcp_config.agy-app.json.template`; that form works ONLY in the app — the CLI
+needs the `agy-cli` bridge template above).
 
 ## Any other MCP client
 

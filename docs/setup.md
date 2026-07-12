@@ -29,6 +29,9 @@ pip install -r requirements.txt
 python run_hub.py
 ```
 
+> On Debian/Ubuntu, `python -m venv` may fail until you
+> `sudo apt install python3-venv` first.
+
 `run_hub.py` is a small **supervisor**: it launches uvicorn
 (`mcp_hub.hub:app` on `127.0.0.1:8000`) and relaunches it when the process exits with
 code 42 — which is what the dashboard's *Restart* button triggers. Any other exit code

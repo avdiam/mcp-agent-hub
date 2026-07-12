@@ -42,6 +42,8 @@
 source venv/bin/activate        # Windows PowerShell: venv\Scripts\Activate.ps1
 pip install -r requirements.txt
 python run_hub.py</code></pre>
+  <div class="note">On Debian/Ubuntu, <code>python -m venv</code> may fail until you
+  <code>sudo apt install python3-venv</code> first.</div>
   <p><code>run_hub.py</code> is a small <strong>supervisor</strong>: it launches
   uvicorn (<code>mcp_hub.hub:app</code> on <code>127.0.0.1:8000</code>) and relaunches
   it when the process exits with code 42 — which is what the dashboard's

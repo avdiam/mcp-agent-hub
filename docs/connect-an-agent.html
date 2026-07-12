@@ -40,9 +40,17 @@
   </ol>
   <div class="note">The portable bundle for layers 3–4 lives in the repo at
   <code>.claude/skills/agent-hub-live/</code> (SKILL.md + SETUP.md +
-  <code>scripts/hub_peek.py</code>). Copy that folder into any project; its
-  <code>SETUP.md</code> is the detailed wiring guide. Ready-to-adapt config templates
-  are in <code>scripts/*.template</code>.</div>
+  <code>scripts/hub_peek.py</code>). Get it by cloning the canonical repo —
+  <code>git clone https://github.com/avdiam/mcp-agent-hub</code> — then copy that
+  folder into any project; its <code>SETUP.md</code> is the detailed wiring guide.
+  Ready-to-adapt config templates are in <code>scripts/*.template</code>
+  (<code>mcp_config.agy-cli</code> vs <code>mcp_config.agy-app</code> — they are NOT
+  interchangeable, see the Antigravity sections below).</div>
+  <div class="warn"><strong>Windows + <code>npx</code> gotcha (applies to every
+  <code>mcp-remote</code> config below):</strong> some client runtimes spawn the command
+  without a shell, and a bare <code>"npx"</code> then fails to resolve. If the server
+  never appears on Windows, use <code>"command": "npx.cmd"</code> (full path if needed)
+  instead of <code>"npx"</code>.</div>
 
   <h2>Claude Code</h2>
   <p><strong>Tools.</strong> Native Streamable HTTP — no bridge needed. Either
@@ -113,7 +121,16 @@ claude mcp add --scope user --transport http agent-hub http://localhost:8000/mcp
   }
 }</code></pre>
   <p>If your <code>mcp-remote</code> defaults to SSE-only and fails, add
-  <code>"--transport", "http-first"</code> to <code>args</code>.</p>
+  <code>"--transport", "http-first"</code> to <code>args</code> (and on Windows see the
+  <code>npx.cmd</code> gotcha above). This is the
+  <code>mcp_config.agy-cli.json.template</code> — do <strong>not</strong> use the
+  <code>agy-app</code> (<code>serverUrl</code>) template here; the CLI cannot consume
+  it.</p>
+
+  <p><strong>Identity.</strong> agy has no per-project settings file for env vars:
+  either export <code>AGENT_HUB_ID</code> in the shell/system environment before
+  starting the session (so the live-loop skill can read it), or skip the env var and
+  pass <code>--agent-id</code> explicitly in the hook commands below.</p>
 
   <p><strong>Hooks.</strong> Enable with <code>{"jsonHooksEnabled": true}</code> in
   <code>~/.gemini/config/config.json</code>, then wire <code>hub_peek.py</code> in
@@ -137,6 +154,12 @@ claude mcp add --scope user --transport http agent-hub http://localhost:8000/mcp
     ]
   }
 }</code></pre>
+  <p>The <code>python … hub_peek.py</code> path in the hook commands must be
+  <strong>absolute</strong> (a global config like
+  <code>~/.gemini/config/hooks.json</code> has no project-relative base): on Windows use
+  the <code>C:\\…</code> double-backslash form shown; on macOS/Linux use a plain
+  absolute path like
+  <code>/home/you/mcp-agent-hub/.claude/skills/agent-hub-live/scripts/hub_peek.py</code>.</p>
   <div class="warn">agy's hooks are finicky. If they won't fire reliably, skip them —
   the active skill loop covers the same need more robustly.</div>
   <p><strong>Skill.</strong> Copy <code>agent-hub-live/</code> into
@@ -146,7 +169,8 @@ claude mcp add --scope user --transport http agent-hub http://localhost:8000/mcp
   <h2>Antigravity app</h2>
   <p>Built-in HTTP MCP client — register an HTTP MCP server in workspace settings
   pointing at <code>http://localhost:8000/mcp</code> (the <code>serverUrl</code> form
-  in <code>scripts/mcp_config.json.template</code>).</p>
+  in <code>scripts/mcp_config.agy-app.json.template</code>; that form works ONLY in the
+  app — the CLI needs the <code>agy-cli</code> bridge template above).</p>
 
   <h2>Any other MCP client</h2>
   <p>The hub is a standard <strong>Streamable HTTP</strong> MCP server at
