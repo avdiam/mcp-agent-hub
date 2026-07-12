@@ -28,9 +28,14 @@ halves closed:
   back-to-back — i.e. remaining "drift" is within this box's run noise tonight (±5–9
   calls/s with the live hub + agents running); antigravity-2's 62.4 was likely
   concurrency-depressed. p50 actually improved vs round 1 (452–463 ms vs 525).
-- **Still open for round 3:** writer-contention baseline (round 2 saw 41 ops/s, no
-  round-1 reference). ⚠️ The live `:8000` hub keeps running pre-fix code until
-  restarted.
+- **Writer-contention baseline recorded (same day, post-fix):** canonical params, fixed
+  HEAD `5108da7` = **51 ops/s** (4800/4800, 0 lock errors) vs round-1 code `060e77d`
+  re-run the same evening = 52 ops/s — no writer regression at HEAD; antigravity-2's
+  41 ops/s was pre-fix D37 cost (the extra `_connect` sat in its enqueue→claim→complete
+  loop) plus 3-agent load. Round 3 compares against 51. Claims-scenario throughput is
+  load-noisy (747–1249 claims/s same evening) — correctness is the gate there.
+- **Live hub restarted** onto the fixed code via `POST /api/restart` (supervisor
+  relaunch, DB untouched, MCP path verified with a bare re-register).
 
 ## 2026-07-12 (night, later 2) — Stress-test round 2: ALL GREEN across three phases (3-agent effort)
 
