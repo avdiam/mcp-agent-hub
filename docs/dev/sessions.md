@@ -2,6 +2,48 @@
 
 > Append-only log of what was accomplished each session. Pairs with `tasks.md` (what's left). This project travels between two PCs and uses **no local Claude memories** — this file is the durable record. Newest session first.
 
+## 2026-07-12 (later) — Dashboard SSE push shipped (D38); AHB-14 watch-item closed
+
+Workstream 2's big remaining item: replace the dashboard's 2 s poll with push. Design
+confirmed with avdia pre-build (SSE over WebSocket; fold in the pure-ASGI middleware
+rewrite). `pytest` **66/66** (62 → +4).
+
+- **Server (D38):** new `GET /api/events` SSE endpoint — full `/api/state` snapshot on
+  connect, then a fresh one whenever the new in-process **`StateNotifier`** (version counter +
+  `asyncio.Condition`) is bumped: by `ActivityTracker` after **every** MCP tool call (each call
+  changes at least the activity feed), by every mutating REST endpoint (+ `/api/peek`, which
+  moves `last_seen`), and by the sweeper **only when a pass changed rows**
+  (`reclaim_stale`/`expire_messages` now return rowcounts). 250 ms debounce coalesces bursts;
+  20 s `: keepalive` comments mark idle streams. `/api/state` refactored onto a shared
+  `build_state()` and kept as first-paint + fallback.
+- **Middleware:** `OriginValidationMiddleware` rewritten as **pure ASGI** (same
+  Host/Origin/Sec-Fetch-Site checks, headers injected on `http.response.start`) — the AHB-14
+  item-3 watch-item (`BaseHTTPMiddleware` may buffer streaming) became live the moment a
+  dashboard-critical SSE stream joined the streamable-HTTP transport behind it. Closed.
+- **Frontend:** new default **Live** refresh mode (`EventSource`; auto-reconnect; falls back
+  to 2 s polling after 5 consecutive connection failures; old intervals stay in the dropdown,
+  persisted under a new `refreshMode` key so everyone lands on Live once). Renders only
+  panels whose slice of state changed (per-panel JSON fingerprints); pushes during an open
+  modal are held and applied on close; uptime ticks locally between pushes.
+- **Test infrastructure gotchas (worth remembering):** httpx's `ASGITransport` runs the ASGI
+  app to completion and buffers the body — it can **never** consume an endless SSE stream —
+  so the two SSE tests spin up a **real uvicorn on an ephemeral port** (`live_server`
+  fixture), which also regression-tests the stream *through* the new ASGI middleware over
+  real HTTP. And module-global asyncio primitives bind to their first event loop, so the
+  autouse fixture now gives each test a fresh `StateNotifier`.
+- **Verified live (scratch instance on :8001, fresh DB):** curl SSE capture = initial
+  snapshot → push per mutation → keepalive at 20 s idle; real MCP `register_agent`/
+  `send_message` through `/mcp` (new middleware) pushed to a watching Chrome dashboard with
+  **no reload and no polling** (network log: exactly one `/api/state` + one `/api/events`);
+  hostile Origin/Host on `/api/events` → 403; **kill-server probe:** EventSource reconnected
+  on its own after a ~7 s outage and the dashboard resumed live updates (uptime reset, empty
+  ring buffer rendered correctly). Bootstrapped `.claude/skills/verify/SKILL.md` with the
+  launch/drive recipe.
+- **Docs:** D38 (+ footer), `specs.md` (§4 live updates), `architecture.md` (§4 push
+  pipeline, §6 ASGI note), `AGENTS.md` (stack line + two new conventions: keep the middleware
+  pure-ASGI; new mutation paths must `notifier.bump()`), AHB-14 item 3 → resolved,
+  `tasks.md` START-HERE + workstream 2(a) done.
+
 ## 2026-07-12 — First real job-board run with `wiki-forge` + D37 hardening (AHB-16/AHB-17)
 
 The board's first real use, run live with `wiki-forge` (fresh `/agent-hub-live` session), then

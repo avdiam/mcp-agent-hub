@@ -69,7 +69,7 @@ mcp-agent-hub/
 - FastMCP — standalone `fastmcp` 3.x (`>=3.4,<4`), Streamable HTTP transport, **not** the deprecated HTTP+SSE transport (see `design-decisions.md`, D13)
 - FastAPI + Uvicorn
 - SQLite3 in WAL mode
-- Jinja2 + Tailwind (CDN), vanilla JS polling `/api/state`
+- Jinja2 + Tailwind (CDN), vanilla JS; dashboard updates are pushed over SSE (`/api/events`, D38) with `/api/state` polling as first-paint + fallback
 
 ## Commands
 
@@ -102,7 +102,8 @@ Both clients run the shared `hub_peek.py` (`.claude/skills/agent-hub-live/script
 - **The job board is a poster-picks auction over the normal task machinery (D36/AHB-2, hardened by D37):** `post_offer` broadcasts an advert under the poster's own flood caps (all-or-nothing — caps reject → no offer); **the payload must be the pure work statement** — it is delivered verbatim as the winner's task, and the hub appends claim instructions to the advert itself (D37/AHB-17). `claim_offer` claims accumulate (no window, one pending claim per agent per offer) and notify the poster via ack-less **`kind="offer_update"`**; a claimant never polls — every outcome pushes to its inbox (the task if selected; an `offer_update` otherwise, by `expires_at` at the latest). `resolve_offer('select')` assigns and **auto-sends the payload as a normal `kind="task"`** to the winner (`session_id = offer_id` — result/failure fan back to the poster on the same session), `'withdraw'` takes it down. Lifecycle: `open → assigned → completed | withdrawn | expired` — a completed assignment flips the offer to terminal `completed`; a failed one **re-opens** it within its TTL (default 24h; `expire_offers` sweeps). The offer **row** is the source of truth — never `reply`/`fail` an `offer_update`. `list_offers` browses the board; the dashboard's Job Board panel is read-only. Purge-deleting an agent removes its board footprint AND its `broadcasts` audit rows (no ghost-advert catch-up — AHB-16).
 - **The hook layer peeks, never claims (D19):** the optional `hub_peek.py` hits the `/api/peek` endpoint only to *nudge* an agent to call `check_inbox`. Peek **claims/mutates no message state** (it only refreshes the queried agent's own `last_seen` server-side — AHB-3/D29). Never let a hook mutate message state or open `hub.db` directly — delivery + ack stay in the MCP `check_inbox`→`reply`/`fail` path.
 - **Store `skills` as JSON text** (the structured Agent-Card capability descriptor; SQLite has no array/object type).
-- **Trust model:** single-user, localhost, no auth — bind `127.0.0.1` only. Hardened against cross-site attacks via strict Origin/Host/Sec-Fetch-Site validation (D18).
+- **Trust model:** single-user, localhost, no auth — bind `127.0.0.1` only. Hardened against cross-site attacks via strict Origin/Host/Sec-Fetch-Site validation (D18). `OriginValidationMiddleware` is **pure ASGI** (D38) — don't convert it back to `BaseHTTPMiddleware`; the `/mcp` transport and the `/api/events` SSE stream both flow through it and must not be buffered.
+- **Dashboard state changes must reach the `StateNotifier` (D38):** any new mutation path (a new REST endpoint, a new sweeper) needs a `notifier.bump()` (MCP tools are covered wholesale by the `ActivityTracker`). Forgetting it means the Live dashboard silently stales until the next unrelated event.
 - When changing the design, update the relevant doc(s) and the decision log in `design-decisions.md` in the same change.
 
 ## Git

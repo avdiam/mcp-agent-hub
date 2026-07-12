@@ -830,15 +830,18 @@ async def claim_pending(db_path, agent_id, visibility_timeout=VISIBILITY_TIMEOUT
 
 @retry_on_lock()
 async def reclaim_stale(db_path, visibility_timeout=VISIBILITY_TIMEOUT):
+    """Returns the number of messages reclaimed (D38: lets the sweeper skip the
+    dashboard push when nothing changed)."""
     async with _connect(db_path) as db:
         now = time.time()
         cutoff = now - visibility_timeout
-        await db.execute("""
-            UPDATE messages 
-            SET status = 'pending', claimed_at = NULL 
+        cursor = await db.execute("""
+            UPDATE messages
+            SET status = 'pending', claimed_at = NULL
             WHERE status = 'in_progress' AND claimed_at < ?
         """, (cutoff,))
         await db.commit()
+        return cursor.rowcount
 
 @retry_on_lock()
 async def reset_stuck(db_path):
@@ -1012,12 +1015,14 @@ async def expire_messages(db_path, message_ttl=MESSAGE_TTL):
         # AHB-1/AHB-2). None has a dependent parent, so expiring them strands nothing; a
         # never-claimed notification must not linger forever. input_request/result/failure
         # stay excluded (D24 carve-out).
-        await db.execute("""
+        cursor = await db.execute("""
             UPDATE messages
             SET status = 'expired', updated_at = ?
             WHERE status = 'pending' AND kind IN ('task', 'announcement', 'offer_update') AND created_at < ?
         """, (now, cutoff))
         await db.commit()
+        # D38: count lets the sweeper skip the dashboard push when nothing changed.
+        return cursor.rowcount
 
 @retry_on_lock()
 async def get_recent_messages(db_path, limit=100):

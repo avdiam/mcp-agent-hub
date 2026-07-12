@@ -7,9 +7,9 @@ from contextlib import asynccontextmanager
 import os
 
 from fastapi import FastAPI, Request
-from fastapi.responses import HTMLResponse, JSONResponse, Response
+from fastapi.responses import HTMLResponse, JSONResponse, Response, StreamingResponse
 from fastapi.templating import Jinja2Templates
-from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.datastructures import Headers, MutableHeaders
 
 from fastmcp import FastMCP, Context
 from fastmcp.utilities.lifespan import combine_lifespans
@@ -31,13 +31,52 @@ LONGPOLL_INTERVAL = 1.0
 # Activity Ring Buffer (D22)
 activity_buffer = deque(maxlen=200)
 
+# Dashboard SSE push (D38)
+SSE_KEEPALIVE = 20.0   # seconds between comment pings on an idle stream
+SSE_DEBOUNCE = 0.25    # coalesce a burst of changes into one push
+
+
+class StateNotifier:
+    """Wakes /api/events streams whenever dashboard-visible state changes (D38).
+
+    A monotonically increasing version + asyncio.Condition. Every mutation site
+    (MCP tool calls via ActivityTracker, operator REST endpoints, the sweeper)
+    calls bump(); each SSE stream waits for the version to move past what it
+    last pushed. Purely in-process, like the activity buffer — a reconnecting
+    client just gets a fresh full snapshot.
+    """
+    def __init__(self):
+        self.version = 0
+        self._cond = asyncio.Condition()
+
+    async def bump(self):
+        async with self._cond:
+            self.version += 1
+            self._cond.notify_all()
+
+    async def wait_for_change(self, seen: int, timeout: float) -> int:
+        """Return the current version, waiting up to `timeout` s for it to move past `seen`."""
+        async with self._cond:
+            if self.version != seen:
+                return self.version
+            try:
+                await asyncio.wait_for(self._cond.wait_for(lambda: self.version != seen), timeout)
+            except asyncio.TimeoutError:
+                pass
+            return self.version
+
+
+notifier = StateNotifier()
+
 # Optional background loop for sweeping stale and expired messages
 async def background_sweeper():
     while True:
         try:
-            await db.reclaim_stale(DB_PATH, visibility_timeout=VISIBILITY_TIMEOUT)
-            await db.expire_messages(DB_PATH, message_ttl=MESSAGE_TTL)
-            await db.expire_offers(DB_PATH)
+            reclaimed = await db.reclaim_stale(DB_PATH, visibility_timeout=VISIBILITY_TIMEOUT)
+            expired = await db.expire_messages(DB_PATH, message_ttl=MESSAGE_TTL)
+            expired_offers = await db.expire_offers(DB_PATH)
+            if reclaimed or expired or expired_offers:
+                await notifier.bump()
         except Exception as e:
             logging.error(f"Sweeper error: {e}")
         await asyncio.sleep(VISIBILITY_TIMEOUT / 2)
@@ -53,37 +92,51 @@ async def hub_lifespan(app: FastAPI):
 
 from urllib.parse import urlparse
 
-# Origin Validation Middleware (D18)
-# Watch-item (AHB-14): this is a Starlette BaseHTTPMiddleware, which in some versions buffers
-# streaming responses; the MCP transport is streamable-HTTP. No issue observed in practice —
-# if streaming ever hiccups under load, rewrite this as pure ASGI middleware.
-class OriginValidationMiddleware(BaseHTTPMiddleware):
-    async def dispatch(self, request: Request, call_next):
-        if request.url.path.startswith("/mcp") or request.url.path.startswith("/api/"):
+# Origin Validation Middleware (D18) — pure ASGI (D38, closes the AHB-14 item-3 watch-item).
+# Deliberately NOT a Starlette BaseHTTPMiddleware: that wrapper can buffer streaming
+# responses and delay client-disconnect propagation, and both the /mcp streamable-HTTP
+# transport and the /api/events SSE stream flow through here.
+class OriginValidationMiddleware:
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+
+        path = scope.get("path", "")
+        if path.startswith("/mcp") or path.startswith("/api/"):
+            headers = Headers(scope=scope)
             # 1. Validate Host header to prevent DNS rebinding
-            host = request.headers.get("host", "")
-            host_name = host.split(":")[0]
+            host_name = headers.get("host", "").split(":")[0]
             if host_name not in ("localhost", "127.0.0.1"):
-                return JSONResponse({"detail": "Forbidden Host"}, status_code=403)
+                await JSONResponse({"detail": "Forbidden Host"}, status_code=403)(scope, receive, send)
+                return
 
             # 2. Validate Origin header
-            origin = request.headers.get("origin")
+            origin = headers.get("origin")
             if origin:
-                parsed = urlparse(origin)
-                if parsed.hostname not in ("localhost", "127.0.0.1"):
-                    return JSONResponse({"detail": "Forbidden Origin"}, status_code=403)
+                if urlparse(origin).hostname not in ("localhost", "127.0.0.1"):
+                    await JSONResponse({"detail": "Forbidden Origin"}, status_code=403)(scope, receive, send)
+                    return
             else:
                 # 3. If Origin is missing, use Sec-Fetch-Site to block cross-site requests
                 # (Browsers omit Origin on same-origin GET. MCP clients omit both, which is allowed)
-                sfs = request.headers.get("sec-fetch-site")
+                sfs = headers.get("sec-fetch-site")
                 if sfs is not None and sfs not in ("same-origin", "none"):
-                    return JSONResponse({"detail": "Cross-site request blocked"}, status_code=403)
-                    
-        response = await call_next(request)
-        # frame-ancestors only works as an HTTP header (Chrome ignores it in <meta>)
-        response.headers["X-Frame-Options"] = "DENY"
-        response.headers.setdefault("Content-Security-Policy", "frame-ancestors 'none'")
-        return response
+                    await JSONResponse({"detail": "Cross-site request blocked"}, status_code=403)(scope, receive, send)
+                    return
+
+        async def send_with_security_headers(message):
+            if message["type"] == "http.response.start":
+                # frame-ancestors only works as an HTTP header (Chrome ignores it in <meta>)
+                resp_headers = MutableHeaders(scope=message)
+                resp_headers["X-Frame-Options"] = "DENY"
+                resp_headers.setdefault("Content-Security-Policy", "frame-ancestors 'none'")
+            await send(message)
+
+        await self.app(scope, receive, send_with_security_headers)
 
 
 # FastMCP Server Setup
@@ -143,6 +196,7 @@ class ActivityTracker:
                 "args": arg_summary,
                 "error": error_str
             })
+            await notifier.bump()  # D38: even a failed call changes the activity feed
             raise e
 
         activity_buffer.append({
@@ -154,6 +208,8 @@ class ActivityTracker:
             "args": arg_summary,
             "error": error_str
         })
+        # D38: every tool call changes dashboard state (at minimum the activity feed).
+        await notifier.bump()
         return result
 
 mcp.add_middleware(ActivityTracker())
@@ -396,8 +452,9 @@ async def favicon_svg():
 async def favicon_ico():
     return Response(status_code=204)
 
-@app.get("/api/state")
-async def api_state():
+async def build_state():
+    """Assemble the full dashboard snapshot — served by /api/state (pull) and pushed
+    per change over /api/events (D38)."""
     # get_all_agents returns status already liveness-derived (AHB-15/D34)
     agents = await db.get_all_agents(DB_PATH)
 
@@ -424,6 +481,34 @@ async def api_state():
         "stats": stats
     }
 
+@app.get("/api/state")
+async def api_state():
+    return await build_state()
+
+@app.get("/api/events")
+async def api_events(request: Request):
+    # Dashboard live stream (D38): one SSE `data:` event = one full state snapshot,
+    # pushed on connect and then whenever the StateNotifier version moves (debounced
+    # so a burst of tool calls coalesces into one push). Comment-line keepalives mark
+    # idle streams alive; EventSource reconnects transparently and every (re)connect
+    # starts with a fresh snapshot, so the stream is stateless.
+    async def stream():
+        seen = notifier.version - 1  # force an immediate first snapshot
+        while True:
+            if await request.is_disconnected():
+                break
+            current = await notifier.wait_for_change(seen, timeout=SSE_KEEPALIVE)
+            if current == seen:
+                yield ": keepalive\n\n"
+                continue
+            await asyncio.sleep(SSE_DEBOUNCE)
+            seen = notifier.version  # re-read after the debounce: swallow the burst
+            state = await build_state()
+            yield f"data: {json.dumps(state)}\n\n"
+
+    return StreamingResponse(stream(), media_type="text/event-stream",
+                             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+
 @app.get("/api/peek")
 async def api_peek(agent_id: str):
     # AHB-3: peeking your own inbox is a presence signal — refresh last_seen so an
@@ -432,6 +517,7 @@ async def api_peek(agent_id: str):
     # untouched: it carries no single actor and must not warm every agent at once.
     await db.touch_last_seen(DB_PATH, agent_id)
     peek_res = await db.peek_inbox(DB_PATH, agent_id)
+    await notifier.bump()  # last_seen moved → agent liveness display may change
     return peek_res
 
 @app.post("/api/reset")
@@ -439,6 +525,7 @@ async def api_reset():
     cleared = len(activity_buffer)
     activity_buffer.clear()
     reclaimed = await db.reset_stuck(DB_PATH)
+    await notifier.bump()
     return {"ok": True, "cleared_events": cleared, "reclaimed_messages": reclaimed}
 
 @app.post("/api/restart")
@@ -451,6 +538,7 @@ async def api_restart():
 @app.post("/api/agents/{agent_id}/disconnect")
 async def api_agents_disconnect(agent_id: str):
     await db.set_agent_offline(DB_PATH, agent_id)
+    await notifier.bump()
     return {"ok": True, "agent_id": agent_id, "status": "offline"}
 
 @app.post("/api/agents/{agent_id}/delete")
@@ -460,11 +548,14 @@ async def api_agents_delete(agent_id: str, purge_messages: bool = False):
     result = await db.delete_agent(DB_PATH, agent_id, purge_messages=purge_messages)
     if result["agents_deleted"] == 0:
         return JSONResponse({"ok": False, "detail": "Agent not found"}, status_code=404)
+    await notifier.bump()
     return {"ok": True, "agent_id": agent_id, **result}
 
 @app.post("/api/purge")
 async def api_purge():
     purged = await db.delete_old(DB_PATH)
+    if purged:
+        await notifier.bump()
     return {"ok": True, "deleted": purged}
 
 class BroadcastBody(BaseModel):
@@ -481,4 +572,5 @@ async def api_broadcast(body: BroadcastBody):
         result = await db.broadcast(DB_PATH, "operator", body.payload, subject=body.subject)
     except ValueError as e:
         return JSONResponse({"ok": False, "error": str(e)}, status_code=400)
+    await notifier.bump()
     return {"ok": True, **result}

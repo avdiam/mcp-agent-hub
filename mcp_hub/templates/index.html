@@ -131,8 +131,9 @@
                     <!-- Poll interval control -->
                     <div class="flex flex-col items-end">
                         <span class="text-xs uppercase tracking-wider font-semibold text-slate-500">Refresh</span>
-                        <select id="poll-select" onchange="onPollChange()" title="How often the dashboard refreshes from the server"
+                        <select id="poll-select" onchange="onPollChange()" title="Live = changes pushed instantly over SSE; intervals = classic polling fallback"
                             class="bg-dark-700 text-slate-300 text-xs font-mono rounded-md border border-white/10 px-1.5 py-0.5 focus:outline-none focus:border-primary-500/50">
+                            <option value="live">Live</option>
                             <option value="1000">1s</option>
                             <option value="2000">2s</option>
                             <option value="5000">5s</option>
@@ -567,26 +568,51 @@
         let filterStatus = '';
         const collapsedSessions = new Set(); // session_ids collapsed in the queue
         let modalOpen = false;               // pause re-render while a modal is open
+        let uptimeBase = null, uptimeAt = 0; // last pushed uptime + when it arrived (ticks locally)
 
-        // ---------- Fetch loop ----------
+        // ---------- Fetch / apply (shared by SSE push and polling fallback) ----------
         async function fetchState() {
-            if (modalOpen) return; // don't yank content out from under the reader
             try {
                 const res = await fetch('/api/state');
-                const data = await res.json();
-                lastAgents = data.agents || [];
-                lastStats = data.stats;
-                cachedMessages = data.messages || [];
-                renderStats(data.agents, cachedMessages, data.stats);
-                renderAgents(data.agents);
-                updateFilterSelects(data.agents, cachedMessages);
-                renderMessages(cachedMessages);
-                renderOffers(data.offers || []);
-                renderEvents(data.events);
-
-                document.getElementById('uptime').textContent = formatDuration(data.stats.uptime);
+                applyState(await res.json());
             } catch (err) {
                 console.error("Failed to fetch state:", err);
+            }
+        }
+
+        // Per-panel fingerprints: only re-render a panel whose slice of state actually
+        // changed (the "diff-based DOM updates" half of the D38 jitter fix). Filter /
+        // collapse interactions re-render directly from cached data, so skipping an
+        // identical push here is always safe.
+        let pendingState = null;   // last push received while a modal was open
+        const panelFP = {};
+        function renderIfChanged(key, slice, render) {
+            const fp = JSON.stringify(slice);
+            if (panelFP[key] === fp) return;
+            panelFP[key] = fp;
+            render();
+        }
+
+        function applyState(data) {
+            if (modalOpen) { pendingState = data; return; } // don't yank content out from under the reader
+            pendingState = null;
+            lastAgents = data.agents || [];
+            lastStats = data.stats;
+            cachedMessages = data.messages || [];
+            const offers = data.offers || [];
+            const events = data.events || [];
+            // uptime ticks locally between pushes — keep it out of the stats fingerprint
+            const statsFP = { ...(data.stats || {}) }; delete statsFP.uptime;
+            renderIfChanged('stats', [lastAgents, cachedMessages, statsFP], () => renderStats(lastAgents, cachedMessages, lastStats));
+            renderIfChanged('agents', lastAgents, () => renderAgents(lastAgents));
+            renderIfChanged('filters', [lastAgents, cachedMessages], () => updateFilterSelects(lastAgents, cachedMessages));
+            renderIfChanged('messages', cachedMessages, () => renderMessages(cachedMessages));
+            renderIfChanged('offers', offers, () => renderOffers(offers));
+            renderIfChanged('events', events, () => renderEvents(events));
+
+            if (data.stats && data.stats.uptime !== undefined) {
+                uptimeBase = data.stats.uptime; uptimeAt = Date.now();
+                document.getElementById('uptime').textContent = formatDuration(uptimeBase);
             }
         }
 
@@ -1087,6 +1113,7 @@
                 panel.classList.remove('modal-exit-active');
                 panel.classList.add('modal-exit');
                 modalOpen = false;
+                if (pendingState) applyState(pendingState); // catch up on pushes held during the modal
             }, 200);
         }
         backdrop.addEventListener('click', (e) => { if (e.target === backdrop) closeModal(); });
@@ -1134,6 +1161,7 @@
                 actPanel.classList.remove('modal-exit-active');
                 actPanel.classList.add('modal-exit');
                 modalOpen = false;
+                if (pendingState) applyState(pendingState); // catch up on pushes held during the modal
             }, 200);
         }
         actBackdrop.addEventListener('click', (e) => { if (e.target === actBackdrop) closeActModal(); });
@@ -1321,17 +1349,48 @@
             sub.textContent = 'Server did not restart within ~35s. If you launched it directly (not via run_hub.py), restart it manually, then reload this page.';
         }
 
-        // ---------- Poll control ----------
+        // ---------- Refresh control: SSE live push (default) or polling fallback ----------
         let pollTimer = null;
-        function applyPoll(ms) {
+        let sse = null;
+        let sseFailures = 0;
+
+        function connectSSE() {
+            sse = new EventSource('/api/events');
+            sse.onopen = () => { sseFailures = 0; };
+            sse.onmessage = (e) => {
+                try { applyState(JSON.parse(e.data)); }
+                catch (err) { console.error('Bad SSE payload:', err); }
+            };
+            sse.onerror = () => {
+                // EventSource reconnects on its own; bail to polling only if it
+                // repeatedly can't hold a connection (no successful open between errors).
+                sseFailures++;
+                if (sseFailures >= 5) {
+                    document.getElementById('poll-select').value = '2000';
+                    localStorage.setItem('refreshMode', '2000');
+                    applyRefresh('2000');
+                    showToast('Live stream unavailable — falling back to 2s polling');
+                }
+            };
+        }
+
+        function applyRefresh(mode) {
             if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
+            if (sse) { sse.close(); sse = null; }
+            if (mode === 'live') { connectSSE(); return; }
+            const ms = parseInt(mode, 10);
             if (ms > 0) pollTimer = setInterval(fetchState, ms);
         }
+
         function onPollChange() {
-            const ms = parseInt(document.getElementById('poll-select').value, 10);
-            localStorage.setItem('pollMs', String(ms));
-            applyPoll(ms);
-            showToast(ms === 0 ? 'Auto-refresh paused' : `Refreshing every ${ms/1000}s`);
+            const mode = document.getElementById('poll-select').value;
+            localStorage.setItem('refreshMode', mode);
+            applyRefresh(mode);
+            if (mode === 'live') showToast('Live — changes pushed instantly');
+            else {
+                const ms = parseInt(mode, 10);
+                showToast(ms === 0 ? 'Auto-refresh paused' : `Refreshing every ${ms/1000}s`);
+            }
         }
 
         // ---------- Init ----------
@@ -1341,10 +1400,10 @@
                 document.getElementById('agents-panel').style.display = 'none';
                 document.getElementById('agents-chevron').classList.add('chevron-collapsed');
             }
-            // restore poll interval
-            const savedPoll = localStorage.getItem('pollMs');
-            const pollMs = savedPoll !== null ? parseInt(savedPoll, 10) : 2000;
-            document.getElementById('poll-select').value = String(pollMs);
+            // restore refresh mode (new key with D38 — everyone lands on Live once, then
+            // their explicit dropdown choice persists; the old pollMs key is ignored)
+            const refreshMode = localStorage.getItem('refreshMode') || 'live';
+            document.getElementById('poll-select').value = refreshMode;
             // Esc closes any open modal/dialog
             document.addEventListener('keydown', (e) => {
                 if (e.key === 'Escape') {
@@ -1353,8 +1412,15 @@
                     if (!confirmBackdrop.classList.contains('hidden')) closeConfirm();
                 }
             });
-            fetchState();
-            applyPoll(pollMs);
+            fetchState();               // immediate first paint in every mode
+            applyRefresh(refreshMode);
+            // Uptime ticks locally between pushes (in Live mode nothing arrives while idle).
+            setInterval(() => {
+                if (uptimeBase !== null) {
+                    document.getElementById('uptime').textContent =
+                        formatDuration(uptimeBase + (Date.now() - uptimeAt) / 1000);
+                }
+            }, 1000);
         })();
     </script>
 </body>

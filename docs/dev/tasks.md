@@ -2,7 +2,22 @@
 
 > **This file is the source of truth for what's left to do.** This project travels between two PCs and uses **no local Claude memories** — anything worth preserving lives here (pending work) or in `sessions.md` (history of what's done). Update both in the same change as the work.
 
-> **▶ START HERE (next session).** **2026-07-12: first real job-board run with `wiki-forge`
+> **▶ START HERE (next session).** **2026-07-12 (later): dashboard SSE push shipped (D38) —
+> workstream 2's big remaining item.** New `GET /api/events` SSE stream pushes the full
+> `/api/state` snapshot on every state change (in-process `StateNotifier` bumped by the
+> ActivityTracker on every tool call, by mutating REST endpoints + `/api/peek`, and by the
+> sweeper only when a pass changed rows; 250 ms debounce, 20 s keepalives). Frontend defaults
+> to a new **Live** mode (`EventSource`, auto-reconnect, auto-fallback to 2 s polling) and
+> re-renders only panels whose data changed (per-panel fingerprints) — idle hub = zero
+> re-renders, jitter gone. `OriginValidationMiddleware` rewritten as **pure ASGI** (closes the
+> AHB-14 item-3 watch-item; SSE regression tests run over a real uvicorn through it — httpx's
+> ASGITransport buffers whole bodies and can't consume SSE). `pytest` **66/66** (62 → +4);
+> verified live end-to-end (real MCP calls pushing to a watching Chrome dashboard, hostile
+> Origin/Host 403s, kill-server → EventSource reconnected on its own). Design confirmed with
+> avdia pre-build (SSE over WebSocket; fold in the ASGI rewrite). **Next candidates:**
+> AHB-10/publish (the last open issue), dogfood the board with more peers, remaining
+> workstream-2 UI ideas (send/requeue from the UI, search, richer metrics). —
+> Prior: **2026-07-12: first real job-board run with `wiki-forge`
 > (green end to end) + D37 hardening (AHB-16/AHB-17 fixed).** wiki-forge autonomously read the
 > advert, claimed offer `cc076b7b` (MCP-vs-A2A Q&A), got selected, worked the auto-created task
 > via /wiki-ask, and fanned back a cited answer + a 4-point friction report — all mechanics
@@ -45,7 +60,7 @@ The hub stays **single-user / many local agents** for the **short + mid term**. 
 
 **Short/mid-term workstreams (before publishing):**
 1. **Stress-test & stabilize** — ✅ **ROUND 1 DONE (2026-06-18).** Built two load harnesses (db-level `scripts/stress/db_stress.py` + antigravity-2's HTTP-level `:8100` harness); fixed the SQLite WAL write-contention bug (`busy_timeout`/`synchronous` missing on operational conns + retry-on-lock — commits `76cb3d5`/`060e77d`) and a `NoneType` crash on unknown `message_id` (`c27d993`). Result: lock errors **1,169 → 0**, success **1.7% → 100%**, throughput **16.5 → 76.1 MCP calls/s**, p95 **13.8s → 1.4s**; atomic-claim correctness held (0 double / 0 lost @ 2000×32); `pytest` 12/12. Connection pooling **deferred** (see v2). See `sessions.md`. **Round-2 candidates (not yet done):** visibility-timeout redelivery under simulated crash (D3), large/many-message payloads, dashboard `/api/state` perf under load.
-2. **Web dashboard — more interactive & useful** — ⏳ **ITERATION 1 DONE & VALIDATED (2026-06-18), workstream still open.** Shipped: fixed the activity/staleness middleware bug (real caller+tool, agents flip online); operator **disconnect** + **purge** buttons (live endpoints); foldable agents; clickable **Live Activity → detail modal**; message **2–4 word titles** + **session/stream grouping** + **per-agent filters** + **friendly stream/session titles** (e.g. `Haiku about APIs (bde4ba65)`); stat tiles; poll-interval control; copy buttons; `/favicon.ico` dummy route; and CSP `frame-ancestors` HTTP response header. Commits: backend `c262e76`/`c80ba2f` (agy), frontend `5427177`/`09058c4`/`f433067` (claude/agy); antigravity-2 full browser E2E = all green. **Still open (next session):** (a) diff-based DOM updates or **SSE/WebSocket push to replace the 2 s poll** (reduces re-render jitter — the big remaining item); (b) possible further UI: send/requeue/expire from the UI, search, richer metrics/thread view.
+2. **Web dashboard — more interactive & useful** — ⏳ **ITERATION 1 DONE & VALIDATED (2026-06-18), workstream still open.** Shipped: fixed the activity/staleness middleware bug (real caller+tool, agents flip online); operator **disconnect** + **purge** buttons (live endpoints); foldable agents; clickable **Live Activity → detail modal**; message **2–4 word titles** + **session/stream grouping** + **per-agent filters** + **friendly stream/session titles** (e.g. `Haiku about APIs (bde4ba65)`); stat tiles; poll-interval control; copy buttons; `/favicon.ico` dummy route; and CSP `frame-ancestors` HTTP response header. Commits: backend `c262e76`/`c80ba2f` (agy), frontend `5427177`/`09058c4`/`f433067` (claude/agy); antigravity-2 full browser E2E = all green. **(a) DONE 2026-07-12 (D38):** SSE push (`/api/events` + `StateNotifier`) replaced the 2 s poll, with per-panel fingerprint rendering on the client (both halves of the item — push *and* diff-based DOM updates); polling survives only as the fallback. **Still open:** (b) possible further UI: send/requeue/expire from the UI, search, richer metrics/thread view.
 3. **New features** — pull forward high-value items that don't need networking (e.g. typed `stop_reason`/fail-category enum, clarification cancel/reject `outcome`, message search/labels — to be scoped). **Broadcast/announce (AHB-1) — FULLY SHIPPED 2026-07-11:** P1 (D33, flood-capped fan-out) + P2 (D35, register-time late-joiner catch-up + dashboard broadcast control). **Job-offer board (AHB-2) — SHIPPED 2026-07-11 (D36):** poster-picks auction, 4 new tools, dashboard Job Board panel; dogfood it with real peers next.
 
 > **Maintainer & issue intake.** The `agent-hub-builder` agent is the point of contact for the hub (hooks, the `agent-hub-live` skill, usage, friction). Reported friction/bugs/feature requests are logged in [`agent-hub-issues.md`](agent-hub-issues.md) and worked off from there.

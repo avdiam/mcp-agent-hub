@@ -14,6 +14,28 @@ async def temp_db(tmp_path):
     return db_file
 
 @pytest.mark.asyncio
+async def test_sweep_functions_report_change_counts(temp_db):
+    # D38: the background sweeper pushes a dashboard update only when a sweep pass
+    # actually changed rows — so the sweeps must report how many rows they touched.
+    assert await db.reclaim_stale(temp_db, visibility_timeout=600) == 0
+    assert await db.expire_messages(temp_db, message_ttl=86400) == 0
+
+    await db.upsert_agent(temp_db, "worker", "[]")
+    await db.upsert_agent(temp_db, "sender", "[]")
+    await db.enqueue_message(temp_db, "sender", "worker", "will go stale in flight")
+    await db.claim_pending(temp_db, "worker")
+    await db.enqueue_message(temp_db, "sender", "worker", "will expire unclaimed")
+
+    async with aiosqlite.connect(temp_db) as conn:
+        past = time.time() - 90000
+        await conn.execute("UPDATE messages SET created_at=?, claimed_at=?", (past, past))
+        await conn.commit()
+
+    # One in_progress row reclaimed; then both (now-pending) tasks expire.
+    assert await db.reclaim_stale(temp_db, visibility_timeout=600) == 1
+    assert await db.expire_messages(temp_db, message_ttl=86400) == 2
+
+@pytest.mark.asyncio
 async def test_skills_json_roundtrip(temp_db):
     skills = [
         {"id": "test_skill", "name": "Test Skill", "description": "A test"}

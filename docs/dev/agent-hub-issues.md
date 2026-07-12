@@ -805,8 +805,10 @@ own at-least-once guarantee.
 
 ## AHB-14 — Minor hardening pass (constants + activity-feed attribution)
 
-- **Status:** ✅ **fixed (2026-07-11) via D32.** Items 1 & 2 implemented; item 3 is a watch-item
-  (documented in code + kept open as a note, no change). `pytest` **26/26**.
+- **Status:** ✅ **fixed (2026-07-11) via D32.** Items 1 & 2 implemented; item 3 was a watch-item
+  (documented in code, no change) — **resolved 2026-07-12 via D38**, which rewrote
+  `OriginValidationMiddleware` as pure ASGI when the dashboard SSE stream made the risk live.
+  `pytest` **26/26** (D32-era).
 - **Reporter:** self-eval (requested by avdia, 2026-07-11).
 
 Small robustness/clarity items, none behavior-critical:
@@ -826,11 +828,14 @@ Small robustness/clarity items, none behavior-critical:
    `db.get_message_endpoints` helper. **Does not touch `last_seen`** (D23 stands). Helper unit-tested
    (`test_get_message_endpoints`); the frontend already fell back to `'System'` for genuinely
    actor-less events (e.g. `list_agents`), so no dashboard change was needed.
-3. **Watch-item (not a confirmed bug) — LEFT AS-IS, documented.** `OriginValidationMiddleware` is a
+3. ~~**Watch-item (not a confirmed bug) — LEFT AS-IS, documented.** `OriginValidationMiddleware` is a
    Starlette `BaseHTTPMiddleware`, which is known to buffer/interfere with SSE streaming in some
    versions, and the MCP transport is streamable-HTTP. Working today; a code comment at the class now
    flags it. If streaming hiccups ever appear under load, rewrite it as pure ASGI middleware. Kept as a
-   standing note rather than a speculative rewrite.
+   standing note rather than a speculative rewrite.~~ **Resolved 2026-07-12 (D38):** the dashboard's
+   new `/api/events` SSE stream made the buffering risk live, so the middleware was rewritten as pure
+   ASGI (same Host/Origin/Sec-Fetch-Site checks; headers injected on `http.response.start`). The SSE
+   regression tests run over a real uvicorn server through this middleware.
 
 ---
 

@@ -1,3 +1,4 @@
+import json
 import pytest
 import pytest_asyncio
 import asyncio
@@ -21,7 +22,11 @@ async def setup_db(tmp_path):
     # Patch the global DB_PATH in the hub module so tools use the temp DB
     original_db_path = hub.DB_PATH
     hub.DB_PATH = temp_db_path
-    
+
+    # Fresh StateNotifier per test (D38): its asyncio.Condition binds to the first
+    # event loop that uses it, and pytest-asyncio gives every test its own loop.
+    hub.notifier = hub.StateNotifier()
+
     await db.init_db(temp_db_path)
     
     yield
@@ -348,3 +353,90 @@ async def test_api_recovery_middleware(test_client):
     # Cross-site POST to /api/restart -> 403 (Don't actually call a valid origin to avoid os._exit)
     res_restart = await test_client.post("/api/restart", headers={"Sec-Fetch-Site": "cross-site"})
     assert res_restart.status_code == 403
+
+@pytest.mark.asyncio
+async def test_security_headers_survive_asgi_middleware(test_client):
+    # D38 rewrote OriginValidationMiddleware as pure ASGI — the D18 response headers
+    # must still be injected on every response.
+    res = await test_client.get("/api/state", headers={"Origin": "http://localhost"})
+    assert res.status_code == 200
+    assert res.headers["x-frame-options"] == "DENY"
+    assert "frame-ancestors" in res.headers.get("content-security-policy", "")
+
+@pytest_asyncio.fixture
+async def live_server():
+    # The SSE tests need a real HTTP server: httpx's ASGITransport runs the ASGI app
+    # to completion and buffers the whole body, so an endless /api/events stream can
+    # never be consumed through it. A real uvicorn on an ephemeral port also exercises
+    # the stream through the pure-ASGI OriginValidationMiddleware (the exact
+    # buffering interaction the AHB-14 watch-item flagged). lifespan="off" keeps the
+    # background sweeper out of the test.
+    import uvicorn
+
+    config = uvicorn.Config(hub.app, host="127.0.0.1", port=0, log_level="warning", lifespan="off")
+    server = uvicorn.Server(config)
+    task = asyncio.create_task(server.serve())
+    for _ in range(500):
+        if server.started:
+            break
+        await asyncio.sleep(0.01)
+    else:
+        raise RuntimeError("uvicorn test server failed to start")
+    port = server.servers[0].sockets[0].getsockname()[1]
+    yield f"http://127.0.0.1:{port}"
+    server.should_exit = True
+    await task
+
+@pytest.mark.asyncio
+async def test_api_events_snapshot_then_push(live_server, monkeypatch):
+    # D38: /api/events opens with a full state snapshot, then pushes a fresh one
+    # whenever hub state changes (here: an operator disconnect).
+    monkeypatch.setattr(hub, "SSE_DEBOUNCE", 0.01)
+    await db.upsert_agent(hub.DB_PATH, "watcher", "[]")
+
+    async with AsyncClient() as rc:
+        async with rc.stream("GET", f"{live_server}/api/events") as resp:
+            assert resp.status_code == 200
+            assert resp.headers["content-type"].startswith("text/event-stream")
+
+            lines = resp.aiter_lines()
+
+            async def next_snapshot():
+                async for line in lines:
+                    if line.startswith("data: "):
+                        return json.loads(line[len("data: "):])
+                raise AssertionError("stream ended without a data event")
+
+            snap = await asyncio.wait_for(next_snapshot(), timeout=5)
+            assert set(snap) == {"agents", "messages", "offers", "events", "stats"}
+            watcher = next(a for a in snap["agents"] if a["id"] == "watcher")
+            assert watcher["status"] != "offline"
+
+            reader = asyncio.create_task(next_snapshot())
+            await asyncio.sleep(0.05)  # let the stream re-subscribe before the change
+            res = await rc.post(f"{live_server}/api/agents/watcher/disconnect")
+            assert res.status_code == 200
+            snap2 = await asyncio.wait_for(reader, timeout=5)
+            watcher2 = next(a for a in snap2["agents"] if a["id"] == "watcher")
+            assert watcher2["status"] == "offline"
+
+@pytest.mark.asyncio
+async def test_api_events_keepalive_on_idle(live_server, monkeypatch):
+    # D38: an idle stream stays alive via comment pings rather than data pushes.
+    monkeypatch.setattr(hub, "SSE_KEEPALIVE", 0.05)
+    monkeypatch.setattr(hub, "SSE_DEBOUNCE", 0.01)
+
+    async with AsyncClient() as rc:
+        async with rc.stream("GET", f"{live_server}/api/events") as resp:
+            assert resp.status_code == 200
+
+            async def scan_for_keepalive():
+                got_snapshot = False
+                async for line in resp.aiter_lines():
+                    if line.startswith("data: "):
+                        got_snapshot = True
+                    elif line.startswith(": keepalive") and got_snapshot:
+                        return True
+                return False
+
+            assert await asyncio.wait_for(scan_for_keepalive(), timeout=5)
