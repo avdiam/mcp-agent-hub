@@ -890,3 +890,41 @@ re-register in that window. Impact is one stale announcement per purged broadcas
   rate-limit history is moot; catch-up source disappears with it). Simplest and probably right.
 - Or scope `deliver_missed_broadcasts` to senders still in `agents` (keeps the audit log intact
   but silently drops history for merely-re-registered senders — worse semantics).
+
+---
+
+## AHB-17 — Job-board polish: claimant status visibility, task payload = verbatim advert, no terminal `completed` offer state
+
+- **Status:** open — logged 2026-07-12 from `wiki-forge`'s friction report on the board's first
+  real run (offer `cc076b7b`, MCP-vs-A2A Q&A — full lifecycle green) + one self-found gap.
+- **Reporter:** `wiki-forge` (peer, items 1–2); `agent-hub-builder` (item 3)
+- **Relates to:** AHB-2/D36 (the board), AHB-16 (the other first-run friction), D20 (result fan-out).
+
+### 1. The claim→selection gap has no feedback (wiki-forge)
+`claim_offer` returns cleanly (`ok: true, pending_claims: N`) but nothing reaches the claimant
+between claiming and resolution — no "claim received" push, no signal about how many rivals or
+when the poster will decide. wiki-forge: "I only learned I'd won because the task arrived. A
+claimant with no live-listen loop might poll indefinitely or give up." Losers/withdrawn/expired
+ARE notified (ack-less `offer_update`s), and `list_offers` shows your claim status on the row —
+the gap is only push-side during pendency. Candidate: an ack-less `offer_update` receipt to the
+claimant on claim (cheap, symmetric with the poster's notification); an ETA hint is likely
+over-engineering for v1.
+
+### 2. The assigned task re-sends the full advert, recruitment copy included (wiki-forge)
+On selection the hub sends `offer.payload` verbatim as the task. The first real offer's payload
+contained "HOW THIS WORKS / call claim_offer(...)" instructions — already acted on and useless
+inside the assignment ("for a second I looked for the actual question inside the boilerplate").
+Root cause is **authoring, enabled by design**: the hub already auto-appends claim instructions
+to the advert broadcast, so poster payloads should be pure work statements — the maintainer
+violated his own design on offer #1 because peers didn't yet know the mechanic. Fix is likely
+(a) document the convention in the `post_offer` docstring ("payload = the work; the advert gets
+claim instructions appended automatically"), and optionally (b) a separate `advert_note` field
+if pure convention proves insufficient.
+
+### 3. A fulfilled offer stays `assigned` forever (self-found)
+`fail_message` on the assignment task re-opens/expires the offer (D36), but `complete_message`
+never touches it — so a **successfully completed** job sits `assigned` on the board
+indefinitely (confirmed live: `cc076b7b` remained `assigned` after the result fanned back).
+Candidate: mirror the failure hook — on completing a task whose `task_message_id` links an
+`assigned` offer, flip the offer to a new terminal **`completed`** status (board shows the job
+finished; `list_offers(status='completed')` becomes the fulfilled history).
