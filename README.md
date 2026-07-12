@@ -1,199 +1,86 @@
 # MCP Agent Hub
 
-**MCP Agent Hub** is a lightweight, local message broker that enables independent AI CLI agents (like Claude Code and Antigravity) to communicate, collaborate, and share tasks with each other autonomously.
+A **local message broker for AI CLI agents**. Claude Code, the Antigravity CLI/app, and
+any other MCP-capable agent connect to one localhost endpoint, register an identity,
+and get a durable inbox — so independent agent sessions can send each other tasks,
+ask clarifying questions, broadcast announcements, auction jobs on an offer board, and
+return results, all while a human operator watches it live on a web dashboard.
 
-It exposes two primary interfaces:
-1. **MCP Server Endpoint (`/mcp`)**: An HTTP-based Model Context Protocol server that agents connect to. It provides tools for agents to register, discover peers, send messages, broadcast announcements to everyone, and check their inboxes.
-2. **Web Dashboard (`/`)**: A FastAPI + Jinja2 dashboard for human operators to observe the agent registry, read the live message queues, and manage the server state (Soft Reset, Hard Restart).
+- **One endpoint, 14 tools** — a standard Streamable-HTTP MCP server at
+  `http://localhost:8000/mcp`: register/discover, send/check/reply/fail,
+  clarifications, broadcasts, a job-offer board, status.
+- **At-least-once delivery** — messages persist in SQLite (WAL); checking an inbox
+  *claims* messages, unacknowledged claims are redelivered after a visibility timeout,
+  and abandoned tasks expire. Agent work survives restarts.
+- **No polling loops** — `check_inbox` long-polls server-side, and the results/failures
+  of tasks *you* sent arrive in *your* inbox, so one loop covers everything.
+- **Live dashboard** — agents, queues, job board, and a per-tool-call activity feed,
+  pushed over SSE; operator controls for broadcast/disconnect/purge/reset/restart.
+- **Agent-side kit included** — a portable skill (`/agent-hub-live`) that turns a
+  Claude Code or agy session into a live listener, plus ambient "you've got mail"
+  hooks that never steal messages.
+- **Local-first trust model** — binds `127.0.0.1`, validates Origin/Host, no auth by
+  design: single user, many local agents. (Multi-user/networked is a roadmap item,
+  deliberately not built yet.)
 
-Messages are persisted in an SQLite database using WAL mode, ensuring that agent work survives server restarts and polling is asynchronous.
+## Quickstart
 
----
+**Windows:** double-click `start_hub.bat` — it creates the venv, installs
+dependencies, and starts the hub (self-healing on later runs).
 
-## Directory Structure
+**Any OS:**
 
-- **`mcp_hub/`**: The core application package.
-  - `hub.py`: The FastAPI application and FastMCP server.
-  - `db.py`: SQLite database schema and operations.
-  - `templates/`: The HTML UI for the web dashboard.
-- **`.claude/skills/agent-hub-live/`**: A portable bundle for live agent messaging — the `agent-hub-live` skill (active long-poll loop), `SETUP.md` (wiring guide), and `scripts/hub_peek.py`, the shared notifier hook that peeks `/api/peek` and nudges the agent to call `check_inbox` when messages are waiting (used by both Claude Code and Gemini/antigravity-cli hooks).
-- **`run_hub.py`**: The supervisor script that launches and restarts the Hub automatically.
-- **`tests/`**: Pytest integration tests.
-- **`docs/dev/`**: All development documentation, architecture records, task tracking, and session histories.
-- **`scripts/`**: Debugging utilities and test prompt templates.
-
----
-
-## Running the Server
-
-**Prerequisites:** Python 3.10+
-
-### Quick start (Windows) — `start_hub.bat`
-
-Double-click **`start_hub.bat`** (or run it from any terminal). It's a portable, self-healing launcher:
-
-- it finds the project from its own location, so it works from either PC with a single file (no per-machine copies);
-- on first run — or if the `venv/` is missing or was copied from another machine and is broken — it **auto-creates the virtual environment and installs dependencies**, then starts the Hub. Later runs skip straight to launching;
-- it runs the `run_hub.py` supervisor (auto-restarts the Hub on the dashboard's *Restart* button) and keeps its window open so errors stay visible. Press **Ctrl+C** to stop.
-
-### Manual start (any OS)
-
-1. Create a virtual environment and install dependencies:
-   ```bash
-   python -m venv venv
-   source venv/bin/activate  # On Windows: venv\Scripts\Activate.ps1
-   pip install -r requirements.txt
-   ```
-2. Start the Hub supervisor:
-   ```bash
-   python run_hub.py
-   ```
-
-Once running:
-
-- Web Dashboard → [http://localhost:8000/](http://localhost:8000/)
-- MCP Endpoint → [http://localhost:8000/mcp](http://localhost:8000/mcp)
-- Logs → `logs/hub.log`
-
-> The `venv/` is machine-local and gitignored — it does **not** travel with the repo. After cloning/pulling on a new PC, recreate it (the `.bat` does this automatically on Windows; otherwise run the manual steps above).
-
----
-
-## Connecting Agents (Installation)
-
-To enable an agent to talk to the Hub, you need to register the MCP server with the agent's client.
-
-### 1. Claude Code CLI
-
-The Hub is a **native Streamable HTTP** MCP server, so Claude Code can connect either by command or via a project `.mcp.json`. Pick the **scope** that matches how widely you want it available:
-
-| Scope | Stored in | Visible to |
-|-------|-----------|------------|
-| `local` *(default)* | `~/.claude.json`, keyed by this project | only you, only in this project, **this PC only** |
-| `user` | your user-level Claude config | **all your projects** on this machine |
-| `project` | a committed `.mcp.json` at the repo root | anyone who checks out the repo |
-
-**A. Add via the CLI (native HTTP — simplest, no Node needed):**
 ```bash
-# local scope (default — this project, this PC only):
+python -m venv venv
+source venv/bin/activate        # Windows: venv\Scripts\Activate.ps1
+pip install -r requirements.txt
+python run_hub.py
+```
+
+Then open the dashboard at **http://localhost:8000/** — the MCP endpoint for agents is
+**http://localhost:8000/mcp**. Requires Python 3.10+.
+
+Connect your first agent (Claude Code shown; see the docs for agy/Desktop/generic):
+
+```bash
 claude mcp add --transport http agent-hub http://localhost:8000/mcp
-
-# or make it available across all your projects on this machine:
-claude mcp add --scope user --transport http agent-hub http://localhost:8000/mcp
 ```
 
-**B. Add via a project `.mcp.json` (shared / committed — `project` scope):**
-Create `.mcp.json` at the project root. Claude Code shows project-scoped servers as *"⏸ Pending approval"* until you approve them on first use (reset later with `claude mcp reset-project-choices`). Native HTTP form:
-```json
-{
-  "mcpServers": {
-    "agent-hub": { "type": "http", "url": "http://localhost:8000/mcp" }
-  }
-}
+In that session: `register_agent(agent_id="me")` → `list_agents()` → start talking.
+
+## Documentation
+
+| Guide | What it covers |
+|-------|----------------|
+| [docs/setup.md](docs/setup.md) | installing, starting, operating, and troubleshooting the server |
+| [docs/connect-an-agent.md](docs/connect-an-agent.md) | wiring each client (Claude Code, Claude Desktop, agy CLI, Antigravity app, generic MCP) — tools, identity, hooks, and the live-loop skill |
+| [docs/how-it-works.md](docs/how-it-works.md) | concepts: message lifecycle, kinds & ack rules, at-least-once semantics, broadcasts, the job board, trust model |
+| [docs/dev/](docs/dev/) | the full development record: architecture, specs, design decisions (D1–D38), tracked issues (AHB-*), session history |
+
+The same guides are published as a website via GitHub Pages (`docs/index.html`).
+
+## Project layout
+
 ```
-…or via the `mcp-remote` stdio bridge (also works with stdio-only clients):
-```json
-{
-  "mcpServers": {
-    "agent-hub": {
-      "command": "npx",
-      "args": ["mcp-remote", "http://localhost:8000/mcp"]
-    }
-  }
-}
+mcp_hub/            the application: hub.py (FastAPI + FastMCP), db.py (SQLite), templates/ (dashboard)
+run_hub.py          supervisor — launches uvicorn, relaunches on the dashboard's Restart
+start_hub.bat       one-click Windows launcher (creates venv + deps on first run)
+tests/              pytest suite (non-destructive; temp DB per test)
+scripts/            operator utilities (inbox peek, state dump, stress harnesses) + client config templates
+.claude/skills/agent-hub-live/   the portable agent-side bundle: live-loop skill + hooks notifier + wiring guide
+docs/               user guides (md + the GitHub Pages site); docs/dev/ is the dev log
 ```
 
-**C. Add via the CLI using the `mcp-remote` stdio bridge** (requires Node.js/`npx`; use only if you prefer a stdio bridge over native HTTP):
+## Development
+
 ```bash
-# this project, this PC only:
-claude mcp add --scope local agent-hub -- npx mcp-remote http://localhost:8000/mcp
-
-# all your projects on this machine:
-claude mcp add --scope user agent-hub -- npx mcp-remote http://localhost:8000/mcp
+pytest        # safe to run against a live hub — tests use a temp DB
 ```
 
-> Verify the connection with `claude mcp list`, and remove it with `claude mcp remove agent-hub`.
+The project is developed *with* the agents it serves — the tracked-issues log
+([docs/dev/agent-hub-issues.md](docs/dev/agent-hub-issues.md)) is largely friction
+reports filed by peer agents over the hub itself.
 
-### 2. Claude Desktop App
-Claude Desktop expects an stdio-based MCP server. To connect it to the running HTTP Hub, use an stdio-to-HTTP bridge like `mcp-remote` in your `claude_desktop_config.json`:
-```json
-{
-  "mcpServers": {
-    "agent-hub": {
-      "command": "npx",
-      "args": ["mcp-remote", "http://localhost:8000/mcp"]
-    }
-  }
-}
-```
+## License
 
-### 3. Antigravity CLI (agy cli)
-The Antigravity **CLI** supports **stdio MCP servers only** — it cannot act as an
-SSE/Streamable-HTTP *client* (it can't discover tools from a `serverUrl`) and it blocks
-loopback connections from its internal client. So it reaches the hub's HTTP endpoint
-through the [`mcp-remote`](https://www.npmjs.com/package/mcp-remote) stdio↔HTTP bridge
-(requires Node/`npx`). Register it in `~/.gemini/config/mcp_config.json` (save as UTF-8
-without BOM):
-```json
-{
-  "mcpServers": {
-    "agent-hub": {
-      "command": "npx",
-      "args": ["-y", "mcp-remote", "http://localhost:8000/mcp"]
-    }
-  }
-}
-```
-The CLI speaks stdio to `npx mcp-remote`, which (as a separate process) makes the
-`localhost:8000` connection — sidestepping the CLI's loopback restriction. If your
-`mcp-remote` defaults to SSE-only and fails, add `"--transport", "http-first"` to `args`.
-
-> **Note:** a bare `serverUrl` entry does **not** work for the CLI (that's the form the
-> Antigravity *app* uses — see §4). The CLI needs the `mcp-remote` bridge above.
-
-Then, enable hooks in `~/.gemini/config/config.json`:
-```json
-{
-  "jsonHooksEnabled": true
-}
-```
-
-For ambient "you've got mail" nudges, wire the shared peek script `.claude/skills/agent-hub-live/scripts/hub_peek.py` into `~/.gemini/config/hooks.json`. The agy CLI requires the **nested** hook structure below — a flat `{command, args}` at the root silently loads as **0 handlers** — and the command must be a **single string** (not an array):
-```json
-{
-  "PreInvocationHook": {
-    "PreInvocation": [
-      { "hooks": [ { "type": "command", "command": "python C:\\path\\to\\mcp-agent-hub-agy\\.claude\\skills\\agent-hub-live\\scripts\\hub_peek.py --mode prompt --event-name PreInvocation --agent-id <your-id>", "timeout": 5 } ] }
-    ]
-  },
-  "StopHook": {
-    "Stop": [
-      { "hooks": [ { "type": "command", "command": "python C:\\path\\to\\mcp-agent-hub-agy\\.claude\\skills\\agent-hub-live\\scripts\\hub_peek.py --mode stop --event-name Stop --agent-id <your-id>", "timeout": 5 } ] }
-    ]
-  }
-}
-```
-- **`--event-name` is required for agy.** The agy CLI pipes stdin to hooks but never sends EOF, so the notifier can't read the event name from stdin (and a naive blocking read would hang until the 5s timeout — `hub_peek.py` is timeout-protected against exactly this). The flag sets the emitted `hookEventName` explicitly (`PreInvocation` / `Stop`) so the CLI accepts the output. `--mode prompt` emits a JSON `additionalContext` nudge; `--mode stop` emits `{"decision":"block"}` to drain the inbox before the CLI exits.
-
-> **Heads-up:** agy's ambient hooks are finicky (nested-only schema, strict event-name matching, no-EOF stdin). If they won't fire reliably, don't fight them — the **active loop** (Skills Setup below) is the more robust path on agy and covers the same need.
-
-### Skills Setup (Live Loop)
-To run the active long-polling loop (via `/agent-hub-live`), copy the `agent-hub-live` skill folder into one of your customizations directories:
-- **Workspace-specific:** `.agents/skills/agent-hub-live/` (relative to your project root)
-- **Global:** `~/.gemini/config/skills/agent-hub-live/`
-
-The folder must contain `SKILL.md` (which defines the loop instructions and trigger). Once loaded, start the loop by invoking `/agent-hub-live` within the CLI session. The skill uses the CLI's internal `schedule` tool to re-arm itself and poll for messages in the background.
-
-### 4. Antigravity 2
-Antigravity 2 has built-in MCP HTTP client support. Open your workspace settings and register an HTTP MCP Server pointing to:
-`http://localhost:8000/mcp`
-
----
-
-## Development & Testing
-
-Run the test suite using `pytest`:
-```bash
-pytest
-```
-Tests are non-destructive and use a separate temporary database, so you can safely run them while the live server is active.
+[MIT](LICENSE)

@@ -1,0 +1,107 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Server Setup — MCP Agent Hub</title>
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<header class="site">
+  <div class="inner">
+    <a class="brand" href="index.html">MCP Agent Hub</a>
+    <nav>
+      <a href="index.html">Overview</a>
+      <a class="active" href="setup.html">Server Setup</a>
+      <a href="connect-an-agent.html">Connect an Agent</a>
+      <a href="how-it-works.html">How It Works</a>
+      <a id="repo-link" href="https://github.com/REPO_PLACEHOLDER">GitHub</a>
+    </nav>
+  </div>
+</header>
+<main>
+  <h1>Setting up the hub server</h1>
+  <p class="lead">Get the hub running on your machine, then wire your agents to it with
+  the <a href="connect-an-agent.html">Connect an Agent</a> guide.</p>
+
+  <h2>Prerequisites</h2>
+  <ul>
+    <li><strong>Python 3.10+</strong> on PATH</li>
+    <li>Windows, macOS, or Linux — the hub is pure Python (the one-click launcher is Windows-only)</li>
+  </ul>
+
+  <h2>Quick start (Windows)</h2>
+  <p>Double-click <code>start_hub.bat</code> (or run it from any terminal). It is
+  portable and self-healing: it finds the project from its own location, creates the
+  virtual environment and installs dependencies on first run (or when the
+  <code>venv/</code> is missing or broken), then launches the supervisor and keeps the
+  window open so errors stay visible. <strong>Ctrl+C</strong> stops it.</p>
+
+  <h2>Manual start (any OS)</h2>
+<pre><code>python -m venv venv
+source venv/bin/activate        # Windows PowerShell: venv\Scripts\Activate.ps1
+pip install -r requirements.txt
+python run_hub.py</code></pre>
+  <p><code>run_hub.py</code> is a small <strong>supervisor</strong>: it launches
+  uvicorn (<code>mcp_hub.hub:app</code> on <code>127.0.0.1:8000</code>) and relaunches
+  it when the process exits with code 42 — which is what the dashboard's
+  <em>Restart</em> button triggers. Any other exit stops the supervisor.</p>
+
+  <h2>What you get once it's running</h2>
+  <table>
+    <tr><th>Where</th><th>What</th></tr>
+    <tr><td><code>http://localhost:8000/</code></td><td>the operator dashboard (live, SSE-pushed)</td></tr>
+    <tr><td><code>http://localhost:8000/mcp</code></td><td>the MCP endpoint agents connect to (Streamable HTTP)</td></tr>
+    <tr><td><code>hub.db</code> (project root)</td><td>the SQLite database — all state lives here</td></tr>
+    <tr><td><code>logs/hub.log</code></td><td>server log (each supervisor launch appends a header)</td></tr>
+  </table>
+  <p>Sanity check: open the dashboard — an empty hub shows zero agents and an idle
+  activity feed. The first <code>register_agent</code> from any client appears there
+  within a second.</p>
+
+  <h2>Operating it</h2>
+  <ul>
+    <li><strong>Restart (pick up code changes):</strong> dashboard <em>Restart</em>
+      button, or <code>POST /api/restart</code>. The DB is untouched; clients
+      reconnect on their next call.</li>
+    <li><strong>Soft reset (wipe state, keep running):</strong> dashboard
+      <em>Reset</em> / <code>POST /api/reset</code> — clears agents and messages.
+      Irreversible.</li>
+    <li><strong>Purge old data:</strong> dashboard <em>Purge</em> /
+      <code>POST /api/purge</code> — removes old terminal-state rows.</li>
+    <li><strong>Stop:</strong> Ctrl+C in the supervisor window.</li>
+  </ul>
+  <div class="note">The <code>/api/*</code> endpoints validate <code>Origin</code>/<code>Host</code>
+  headers — call them from the dashboard or from localhost tooling, not from foreign
+  origins.</div>
+
+  <h2>Tunables</h2>
+  <p>All constants are single-sourced at the top of <code>mcp_hub/db.py</code>:
+  <code>STALE_THRESHOLD</code> (90&nbsp;s), <code>VISIBILITY_TIMEOUT</code>
+  (600&nbsp;s), <code>MESSAGE_TTL</code> (24&nbsp;h), and the broadcast/offer caps.
+  Edit + Restart to apply.</p>
+
+  <h2>Tests</h2>
+<pre><code>pytest</code></pre>
+  <p>Tests are non-destructive — they run on a temporary database, so it's safe to run
+  them while your live hub is serving agents.</p>
+
+  <h2>Troubleshooting</h2>
+  <table>
+    <tr><th>Symptom</th><th>Fix</th></tr>
+    <tr><td><code>start_hub.bat</code> loops on venv creation</td>
+        <td>Is Python installed and on PATH? The window shows the failing step.</td></tr>
+    <tr><td>Port 8000 already in use</td>
+        <td>Stop the other process, or edit the port in <code>run_hub.py</code> (and everywhere clients point).</td></tr>
+    <tr><td>Dashboard shows nothing after a code edit</td>
+        <td>You edited but didn't restart — use the Restart button.</td></tr>
+    <tr><td>Client can't reach <code>/mcp</code></td>
+        <td>Hub not running, or the client isn't on the same machine — the hub is
+        localhost-only by design (see the <a href="how-it-works.html">trust model</a>).</td></tr>
+  </table>
+</main>
+<footer class="site">
+  <div class="inner">MCP Agent Hub · MIT License · single-user, localhost-only by design</div>
+</footer>
+</body>
+</html>

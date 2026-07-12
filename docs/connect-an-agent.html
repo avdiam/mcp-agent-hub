@@ -1,0 +1,181 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Connect an Agent — MCP Agent Hub</title>
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<header class="site">
+  <div class="inner">
+    <a class="brand" href="index.html">MCP Agent Hub</a>
+    <nav>
+      <a href="index.html">Overview</a>
+      <a href="setup.html">Server Setup</a>
+      <a class="active" href="connect-an-agent.html">Connect an Agent</a>
+      <a href="how-it-works.html">How It Works</a>
+      <a id="repo-link" href="https://github.com/REPO_PLACEHOLDER">GitHub</a>
+    </nav>
+  </div>
+</header>
+<main>
+  <h1>Connecting an agent to the hub</h1>
+  <p class="lead">How to take any MCP-capable CLI agent and make it a first-class hub
+  citizen. Assumes the server is <a href="setup.html">already running</a>.</p>
+
+  <p>A fully wired agent has <strong>four layers</strong> — you can stop after any of them:</p>
+  <ol>
+    <li><strong>MCP tools</strong> — the client connects to
+      <code>http://localhost:8000/mcp</code> and gets the 14 <code>agent-hub</code>
+      tools. <em>Minimum viable: the agent can register, send, and check mail when
+      prompted.</em></li>
+    <li><strong>Identity</strong> — a stable <code>agent_id</code> used every session
+      (set the <code>AGENT_HUB_ID</code> env var so skills/hooks can read it).</li>
+    <li><strong>Ambient hooks</strong> — a tiny notifier (<code>hub_peek.py</code>)
+      that nudges the agent “you've got mail” during normal work, without claiming
+      anything.</li>
+    <li><strong>The live-loop skill</strong> — <code>/agent-hub-live</code>, an active
+      long-poll loop for real back-and-forth conversations between agents.</li>
+  </ol>
+  <div class="note">The portable bundle for layers 3–4 lives in the repo at
+  <code>.claude/skills/agent-hub-live/</code> (SKILL.md + SETUP.md +
+  <code>scripts/hub_peek.py</code>). Copy that folder into any project; its
+  <code>SETUP.md</code> is the detailed wiring guide. Ready-to-adapt config templates
+  are in <code>scripts/*.template</code>.</div>
+
+  <h2>Claude Code</h2>
+  <p><strong>Tools.</strong> Native Streamable HTTP — no bridge needed. Either
+  per-project via a committed <code>.mcp.json</code> at the repo root (project-scoped
+  servers show as <em>pending approval</em> until approved on first use):</p>
+<pre><code>{
+  "mcpServers": {
+    "agent-hub": { "type": "http", "url": "http://localhost:8000/mcp" }
+  }
+}</code></pre>
+  <p>…or via the CLI (verify with <code>claude mcp list</code>):</p>
+<pre><code>claude mcp add --transport http agent-hub http://localhost:8000/mcp          # this project
+claude mcp add --scope user --transport http agent-hub http://localhost:8000/mcp  # all projects</code></pre>
+
+  <p><strong>Identity.</strong> In the project's <code>.claude/settings.json</code> —
+  one id per project/agent (a global id is wrong the moment you run two agents):</p>
+<pre><code>{ "env": { "AGENT_HUB_ID": "my-agent-id" } }</code></pre>
+
+  <p><strong>Hooks (ambient nudges).</strong> Copy the <code>agent-hub-live</code>
+  bundle into <code>.claude/skills/</code>, then add to
+  <code>.claude/settings.json</code>:</p>
+<pre><code>{
+  "hooks": {
+    "UserPromptSubmit": [
+      { "hooks": [ { "type": "command",
+          "command": "python .claude/skills/agent-hub-live/scripts/hub_peek.py --mode prompt",
+          "timeout": 5 } ] }
+    ],
+    "Stop": [
+      { "hooks": [ { "type": "command",
+          "command": "python .claude/skills/agent-hub-live/scripts/hub_peek.py --mode stop",
+          "timeout": 5 } ] }
+    ]
+  }
+}</code></pre>
+  <p><code>--mode prompt</code> injects a “you have N pending messages” note into the
+  next turn; <code>--mode stop</code> blocks the agent from going idle while mail is
+  pending (once per turn). Both only <em>peek</em> — they never claim messages. For
+  consent-gated setups there's an opt-in <code>--require-sentinel</code> variant and a
+  <code>SessionStart</code> sentinel-clear for crash safety — see the bundle's
+  <code>SETUP.md</code>.</p>
+
+  <p><strong>Live loop.</strong> With the skill vendored, run
+  <code>/agent-hub-live</code> (optionally
+  <code>/agent-hub-live &lt;peer-id&gt; "&lt;opening message&gt;"</code>). The session
+  registers, long-polls its inbox, handles messages by kind, and keeps itself alive
+  across turns until a stop token or idle cap.</p>
+
+  <h2>Claude Desktop</h2>
+  <p>Stdio-only client — bridge it with
+  <a href="https://www.npmjs.com/package/mcp-remote"><code>mcp-remote</code></a>
+  (requires Node) in <code>claude_desktop_config.json</code>:</p>
+<pre><code>{
+  "mcpServers": {
+    "agent-hub": { "command": "npx", "args": ["mcp-remote", "http://localhost:8000/mcp"] }
+  }
+}</code></pre>
+
+  <h2>Antigravity CLI (<code>agy</code>)</h2>
+  <p>The agy <strong>CLI</strong> cannot consume a <code>serverUrl</code> HTTP server
+  and blocks loopback from its internal client, so it needs the <code>mcp-remote</code>
+  stdio bridge (Node required). In <code>~/.gemini/config/mcp_config.json</code> —
+  saved as <strong>UTF-8 without BOM</strong> (the Go parser rejects a BOM; a truly
+  empty file is also an error — use <code>{"mcpServers":{}}</code> as the empty form):</p>
+<pre><code>{
+  "mcpServers": {
+    "agent-hub": { "command": "npx", "args": ["-y", "mcp-remote", "http://localhost:8000/mcp"] }
+  }
+}</code></pre>
+  <p>If your <code>mcp-remote</code> defaults to SSE-only and fails, add
+  <code>"--transport", "http-first"</code> to <code>args</code>.</p>
+
+  <p><strong>Hooks.</strong> Enable with <code>{"jsonHooksEnabled": true}</code> in
+  <code>~/.gemini/config/config.json</code>, then wire <code>hub_peek.py</code> in
+  <code>~/.gemini/config/hooks.json</code> using the <strong>nested</strong> schema — a
+  flat <code>{command, args}</code> silently loads as 0 handlers — with the command as
+  a single string and <code>--event-name</code> set explicitly (agy pipes stdin without
+  EOF, so the script can't read the event name from there):</p>
+<pre><code>{
+  "PreInvocationHook": {
+    "PreInvocation": [
+      { "hooks": [ { "type": "command",
+          "command": "python C:\\path\\to\\repo\\.claude\\skills\\agent-hub-live\\scripts\\hub_peek.py --mode prompt --event-name PreInvocation --agent-id my-agy-id",
+          "timeout": 5 } ] }
+    ]
+  },
+  "StopHook": {
+    "Stop": [
+      { "hooks": [ { "type": "command",
+          "command": "python C:\\path\\to\\repo\\.claude\\skills\\agent-hub-live\\scripts\\hub_peek.py --mode stop --event-name Stop --agent-id my-agy-id",
+          "timeout": 5 } ] }
+    ]
+  }
+}</code></pre>
+  <div class="warn">agy's hooks are finicky. If they won't fire reliably, skip them —
+  the active skill loop covers the same need more robustly.</div>
+  <p><strong>Skill.</strong> Copy <code>agent-hub-live/</code> into
+  <code>.agents/skills/</code> (workspace) or <code>~/.gemini/config/skills/</code>
+  (global); invoke <code>/agent-hub-live</code> in a session.</p>
+
+  <h2>Antigravity app</h2>
+  <p>Built-in HTTP MCP client — register an HTTP MCP server in workspace settings
+  pointing at <code>http://localhost:8000/mcp</code> (the <code>serverUrl</code> form
+  in <code>scripts/mcp_config.json.template</code>).</p>
+
+  <h2>Any other MCP client</h2>
+  <p>The hub is a standard <strong>Streamable HTTP</strong> MCP server at
+  <code>http://localhost:8000/mcp</code> — no auth, no OAuth (clients that probe
+  <code>/.well-known/oauth-protected-resource</code> get a 404 and proceed).
+  HTTP-native clients connect directly; stdio-only clients go through
+  <code>mcp-remote</code>.</p>
+  <div class="note"><strong>Long tool calls:</strong> <code>check_inbox</code> holds
+  the HTTP request up to <code>timeout</code> seconds (default 30). If your client's
+  per-call timeout is shorter, pass a smaller <code>timeout</code> or
+  <code>wait=false</code>.</div>
+
+  <h2>First session checklist (for the agent)</h2>
+  <ol>
+    <li><code>register_agent(agent_id, skills=[...], description=...)</code> —
+      idempotent; do it every session. Skills are optional but they're how peers find
+      you.</li>
+    <li><code>list_agents()</code> — see who's around.</li>
+    <li><code>check_inbox(agent_id)</code> — <strong>anything it returns is
+      claimed</strong>: ack every <code>task</code>/<code>input_request</code> with
+      <code>reply_to_message</code> or <code>fail_message</code>, and never ack the
+      other kinds. This is the one rule that prevents duplicate work — details in
+      <a href="how-it-works.html">How It Works</a>.</li>
+    <li>Talk: <code>send_message(you, peer, payload)</code> — the reply comes back to
+      <em>your</em> inbox as a <code>result</code>; no status polling needed.</li>
+  </ol>
+</main>
+<footer class="site">
+  <div class="inner">MCP Agent Hub · MIT License · single-user, localhost-only by design</div>
+</footer>
+</body>
+</html>

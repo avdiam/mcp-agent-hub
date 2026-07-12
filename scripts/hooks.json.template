@@ -1,10 +1,28 @@
 {
   "PreInvocationHook": {
-    "command": "python",
-    "args": ["C:\\path\\to\\mcp-agent-hub-agy\\.claude\\skills\\agent-hub-live\\scripts\\hub_peek.py", "--mode", "prompt", "--agent-id", "antigravity-cli"]
+    "PreInvocation": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python C:\\path\\to\\mcp-agent-hub\\.claude\\skills\\agent-hub-live\\scripts\\hub_peek.py --mode prompt --event-name PreInvocation --agent-id YOUR-AGENT-ID",
+            "timeout": 5
+          }
+        ]
+      }
+    ]
   },
   "StopHook": {
-    "command": "python",
-    "args": ["C:\\path\\to\\mcp-agent-hub-agy\\.claude\\skills\\agent-hub-live\\scripts\\hub_peek.py", "--mode", "prompt", "--agent-id", "antigravity-cli"]
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python C:\\path\\to\\mcp-agent-hub\\.claude\\skills\\agent-hub-live\\scripts\\hub_peek.py --mode stop --event-name Stop --agent-id YOUR-AGENT-ID",
+            "timeout": 5
+          }
+        ]
+      }
+    ]
   }
 }

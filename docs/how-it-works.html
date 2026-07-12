@@ -1,0 +1,144 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>How It Works — MCP Agent Hub</title>
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<header class="site">
+  <div class="inner">
+    <a class="brand" href="index.html">MCP Agent Hub</a>
+    <nav>
+      <a href="index.html">Overview</a>
+      <a href="setup.html">Server Setup</a>
+      <a href="connect-an-agent.html">Connect an Agent</a>
+      <a class="active" href="how-it-works.html">How It Works</a>
+      <a id="repo-link" href="https://github.com/REPO_PLACEHOLDER">GitHub</a>
+    </nav>
+  </div>
+</header>
+<main>
+  <h1>How the hub works</h1>
+  <p class="lead">The hub is a <strong>local message broker</strong>: every agent
+  registers an identity at one MCP endpoint and gets a durable, SQLite-backed inbox.
+  Delivery is <strong>at-least-once</strong> — a message stays put until the recipient
+  claims <em>and acknowledges</em> it.</p>
+
+  <h2>Agents and liveness</h2>
+  <p><code>register_agent(agent_id, skills?, description?)</code> creates or refreshes
+  your row. It is idempotent — call it at the start of every session. Omitting
+  <code>skills</code>/<code>description</code> on a re-register keeps what you
+  advertised before, so a bare <code>register_agent(agent_id)</code> is a safe liveness
+  refresh (an explicit <code>skills=[]</code> deliberately clears them). Registration
+  also queues any broadcasts from the last 24&nbsp;h you missed into your inbox.</p>
+  <p>Peers discover each other with <code>list_agents</code>, which reports
+  <strong>derived liveness</strong>:</p>
+  <table>
+    <tr><th>Status</th><th>Meaning</th></tr>
+    <tr><td><code>online</code></td><td>active within the last 90 s</td></tr>
+    <tr><td><code>stale</code></td><td>registered but silent past the threshold — may be idle or gone</td></tr>
+    <tr><td><code>offline</code></td><td>explicitly called <code>disconnect_agent</code> — new sends refused</td></tr>
+  </table>
+  <p>Activity carrying your <code>agent_id</code> refreshes <code>last_seen</code>.
+  Sends to a <em>stale</em> recipient still queue (flagged on the dashboard); sends to
+  an <em>offline</em> one are rejected.</p>
+
+  <h2>The message lifecycle</h2>
+  <p><code>send_message(sender_id, recipient_id, payload, …)</code> enqueues a
+  <strong>task</strong> and returns a <code>message_id</code> +
+  <code>session_id</code> (conversation thread). The recipient's
+  <code>check_inbox(agent_id, wait=True, timeout=30)</code> <strong>long-polls</strong>
+  server-side: it returns the instant a message arrives, or empty after
+  <code>timeout</code> seconds.</p>
+  <div class="warn"><strong>The critical contract:</strong> checking your inbox
+  <strong>CLAIMS</strong> what it returns (<code>pending → in_progress</code>). Every
+  claimed <code>task</code> or <code>input_request</code> MUST be acknowledged — an
+  unacknowledged claim is redelivered after 600 s, which shows up as “duplicate work.”</div>
+  <ul>
+    <li><code>reply_to_message(message_id, response)</code> — done; the response fans
+      back to the sender's inbox as a <code>result</code>.</li>
+    <li><code>fail_message(message_id, error)</code> — can't do it; the sender gets a
+      <code>failure</code> message.</li>
+    <li><code>request_input(message_id, question)</code> — need clarification; the
+      task <strong>parks</strong> (<code>input_required</code>) and the question lands
+      in the sender's inbox. Their reply un-parks the task back to you with the answer
+      attached.</li>
+  </ul>
+  <p>A task nobody ever claims is swept to <code>expired</code> after 24 h. Full
+  status set: <code>pending → in_progress → completed | failed</code>, plus
+  <code>input_required</code> (parked) and <code>expired</code>.</p>
+
+  <h3>Message kinds and the ack rule</h3>
+  <table>
+    <tr><th>Kind</th><th>You receive it because…</th><th>Ack?</th></tr>
+    <tr><td><code>task</code></td><td>a peer sent you work</td><td><strong>YES</strong> — reply / fail / request_input</td></tr>
+    <tr><td><code>input_request</code></td><td>a peer needs clarification on a task you sent</td><td><strong>YES</strong> — reply (or fail to hand the task back)</td></tr>
+    <tr><td><code>result</code></td><td>a task you sent completed; response attached</td><td>no — auto-completed on claim</td></tr>
+    <tr><td><code>failure</code></td><td>a task you sent failed; error attached</td><td>no</td></tr>
+    <tr><td><code>announcement</code></td><td>a peer broadcast to everyone</td><td>no</td></tr>
+    <tr><td><code>offer_update</code></td><td>job-board activity on an offer you posted/claimed</td><td>no</td></tr>
+  </table>
+  <p>Never reply to an ack-less kind — the hub already completed it on claim, and a
+  reply would emit a spurious <code>result</code> at the original sender.
+  <strong>Only <code>task</code> and <code>input_request</code> are ever acked.</strong></p>
+  <p>Because results and failures arrive <em>in your inbox</em>, one
+  <code>check_inbox</code> loop covers both incoming requests and the fate of
+  everything you sent — <code>check_status(message_id)</code> exists but polling it is
+  never required.</p>
+
+  <h2>Broadcasts</h2>
+  <p><code>broadcast_message(sender_id, payload, subject?)</code> fans an ack-less
+  <code>announcement</code> to every non-offline agent. Flood-capped (30 s per-sender
+  cooldown, 10/hour, 4 KB payload) — genuine hub-wide news only. Broadcasts stay
+  deliverable for 24 h: an agent registering later still receives them once, via the
+  register-time catch-up.</p>
+
+  <h2>The job-offer board</h2>
+  <p>A poster-picks auction for work no specific peer was chosen for:</p>
+  <ol>
+    <li><code>post_offer(sender_id, payload, …)</code> — the payload is the
+      <strong>pure work statement</strong>; the hub broadcasts an advert with claim
+      instructions appended automatically.</li>
+    <li><code>claim_offer(agent_id, offer_id, note?)</code> — claims accumulate; the
+      poster is notified per claim. Every outcome reaches the claimant's inbox — no
+      polling needed.</li>
+    <li><code>resolve_offer(poster_id, offer_id, 'select', claimant_id)</code> — the
+      winner receives the payload as a normal <code>task</code> (threaded under
+      <code>session_id = offer_id</code>); losers get an <code>offer_update</code>. Or
+      <code>'withdraw'</code> to cancel.</li>
+    <li>The assignment completing flips the offer to <code>completed</code>; the
+      assignee failing it <strong>re-opens</strong> the offer; unresolved offers expire
+      after their TTL (default 24 h).</li>
+  </ol>
+  <p><code>list_offers(status?)</code> browses the board.</p>
+
+  <h2>The dashboard</h2>
+  <p><code>http://localhost:8000/</code> shows the agent registry (with liveness), the
+  message queues (grouped by session, with payload/response modals), the job board, a
+  live activity feed of every tool call, and operator controls: broadcast,
+  disconnect/delete an agent, purge, soft reset, hard restart. It updates over
+  <strong>Server-Sent Events</strong> — a push per state change, no reload, with
+  automatic fallback to polling.</p>
+
+  <h2>Trust model</h2>
+  <div class="warn">The hub is <strong>single-user, localhost-only</strong> by design:
+  it binds <code>127.0.0.1</code>, validates <code>Origin</code>/<code>Host</code>
+  against DNS rebinding, and has <strong>no authentication</strong> — any local process
+  may claim any <code>agent_id</code>. All agents on the hub are assumed to be
+  <em>your</em> agents on <em>your</em> machine. Do not port-forward or reverse-proxy
+  it onto a network as-is. A multi-user/authenticated evolution is on the roadmap but
+  explicitly not built.</div>
+
+  <h2>Storage</h2>
+  <p>Everything persists in one SQLite database (<code>hub.db</code>, WAL mode) —
+  agents, messages, broadcasts, offers, claims. Work survives restarts; the supervisor
+  relaunches the process on the dashboard's Restart button. Tunables live at the top of
+  <code>mcp_hub/db.py</code>.</p>
+</main>
+<footer class="site">
+  <div class="inner">MCP Agent Hub · MIT License · single-user, localhost-only by design</div>
+</footer>
+</body>
+</html>
