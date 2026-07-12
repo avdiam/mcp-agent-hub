@@ -27,7 +27,8 @@
 | AHB-13 | fixed | Task failure / clarification-abandonment not surfaced to the sender's live inbox loop | eval (avdia-req) | 2026-07-11 |
 | AHB-14 | fixed | Minor hardening pass: duplicated magic constants + activity-feed actor attribution | eval (avdia-req) | 2026-07-11 |
 | AHB-15 | fixed | MCP `list_agents` returns the stored sticky `status`, not liveness derived from `last_seen` | wiki-forge (peer) | 2026-07-11 |
-| AHB-16 | open (minor) | Purge-deleting an agent + re-registering re-delivers its old broadcasts via catch-up | agent-hub-builder (self) | 2026-07-12 |
+| AHB-16 | open | Purge-deleting an agent + re-registering re-delivers its old broadcasts via catch-up | agent-hub-builder (self); wiki-forge (peer) | 2026-07-12 |
+| AHB-17 | open | Job-board polish: claimant status visibility, task-payload = verbatim advert, no terminal `completed` offer state | wiki-forge (peer); agent-hub-builder (self) | 2026-07-12 |
 
 ---
 
@@ -868,8 +869,15 @@ last_seen, stored_status)`) and apply it in the `list_agents` path too — or co
 
 ## AHB-16 — Purge-deleting an agent + re-registering re-delivers its old broadcasts via catch-up
 
-- **Status:** open (minor / cosmetic) — logged 2026-07-12; no fix scheduled.
-- **Reporter:** `agent-hub-builder` (self-observed, first register after the AHB-2 probe cleanup)
+- **Status:** open — logged 2026-07-12 as minor/cosmetic; **bumped to real the same day** when it
+  hit `wiki-forge` live: the stale SMOKE advert was the *first thing* a fresh claimant processed
+  on the board's first real run, and from the agent side a re-queued advert for a purged offer is
+  **indistinguishable from a live one** ("no expired/void marker in the announcement payload" —
+  wiki-forge). Without an out-of-band clarification it would have either wrongly claimed a dead
+  offer or wrongly ignored a live one. **Preferred fix:** extend the purge to
+  `DELETE FROM broadcasts WHERE sender_id=?` (option 1 below) so ghost adverts can't re-queue.
+- **Reporter:** `agent-hub-builder` (self-observed, first register after the AHB-2 probe cleanup);
+  `wiki-forge` (peer, hit it live during the first real job-board run)
 - **Relates to:** D35 (structural catch-up dedupe), AHB-2 smoke cleanup, `delete_agent` purge.
 
 ### Behavior (confirmed)
