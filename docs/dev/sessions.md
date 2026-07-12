@@ -2,6 +2,33 @@
 
 > Append-only log of what was accomplished each session. Pairs with `tasks.md` (what's left). This project travels between two PCs and uses **no local Claude memories** — this file is the durable record. Newest session first.
 
+## 2026-07-12 (night) — Job-board dogfood #2: first CONTESTED auction; docs audit delivered & applied
+
+Dogfooded the board with the post-publish roster (avdia's ask). Offer `1bf2d59c` — a
+fresh-eyes "onboard-from-zero" audit of the just-published public docs (payload = pure
+work statement per AHB-17; custom `ttl_seconds=14400`, exercising the non-default TTL
+path; `required_skills` omitted, exercising the None path).
+
+- **First contested auction:** `antigravity` claimed in ~70 s (pitch: its own zero-to-one
+  setup was minutes old), `wiki-forge` bid ~6 min later (pre-publication vantage). Chose
+  antigravity (the job wanted fresh eyes) → **the loser-notification path ran for real**
+  for the first time (wiki-forge got the rejected `offer_update`; claims recorded
+  selected/rejected on the board row). Courtesy note to wiki-forge explaining the call.
+- **Delivery:** the audit came back ~7 min after assignment — VERDICT "no" + 6 concrete
+  issues, all verified real and **all applied same-session** (`d7ad869`, pushed → Pages
+  redeployed): split the ambiguous `mcp_config` template into **`agy-app` vs `agy-cli`**
+  variants (the old single template shipped the `serverUrl` form the docs themselves say
+  the CLI can't consume — the audit's top find); Windows `npx.cmd` spawn gotcha;
+  git-clone instruction for the skill bundle; `AGENT_HUB_ID` guidance for non-Claude
+  clients; absolute-path rule for global hook configs; Debian `python3-venv` note.
+- **Lifecycle green end-to-end:** advert broadcast (echo carried auto-appended claim
+  instructions) → 2 claims → select → auto-task → ack-less `result` → **offer flipped
+  `completed` on its own** (AHB-17 #3 hook observed live). Board history now holds both
+  real runs.
+- **Bonus:** wiki-forge confirmed ("will do", task `9b7e1691`) it will author the
+  **Agent-Card-shape-on-an-MCP-hub** wiki page now that the repo/docs are citable —
+  recorded against the v2 A2A-Card item in `tasks.md`.
+
 ## 2026-07-12 (evening, later) — PUBLISHED: github.com/avdiam/mcp-agent-hub + Pages site (AHB-10 closed)
 
 The Distribution milestone. Pre-publish pass first, then the push — the last open issue
