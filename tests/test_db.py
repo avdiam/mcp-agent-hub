@@ -171,7 +171,8 @@ async def test_delete_agent_option_a_keeps_messages(temp_db):
 
     # Option A (default): agent row removed, messages preserved
     result = await db.delete_agent(temp_db, "victim")
-    assert result == {"agents_deleted": 1, "messages_deleted": 0, "offers_deleted": 0}
+    assert result == {"agents_deleted": 1, "messages_deleted": 0, "offers_deleted": 0,
+                      "broadcasts_deleted": 0}
 
     agents = await db.get_all_agents(temp_db)
     assert [a["id"] for a in agents] == ["peer"]
@@ -924,6 +925,60 @@ async def test_delete_agent_purge_covers_board_footprint(temp_db):
     # Non-purge delete leaves the board intact.
     await db.delete_agent(temp_db, "alice", purge_messages=False)
     assert [o["id"] for o in await db.list_offers(temp_db)] == [their_offer]
+
+@pytest.mark.asyncio
+async def test_purge_deletes_broadcasts_so_catchup_cannot_requeue_ghost_adverts(temp_db):
+    # AHB-16: purging a broadcaster removes its audit rows too — otherwise the purge deletes
+    # recipients' advert copies and register-time catch-up re-queues ghosts for dead offers.
+    await db.upsert_agent(temp_db, "probe", "[]")
+    await db.upsert_agent(temp_db, "peer", "[]")
+    await db.post_offer(temp_db, "probe", "smoke work")
+
+    res = await db.delete_agent(temp_db, "probe", purge_messages=True)
+    assert res["broadcasts_deleted"] == 1
+    assert res["offers_deleted"] == 1
+
+    # peer's advert copy was purged with the sender; without the audit row, re-registering
+    # must NOT re-deliver the ghost advert.
+    assert await db.deliver_missed_broadcasts(temp_db, "peer") == 0
+    async with aiosqlite.connect(temp_db) as conn:
+        async with conn.execute("SELECT COUNT(*) FROM broadcasts") as cursor:
+            assert (await cursor.fetchone())[0] == 0
+
+@pytest.mark.asyncio
+async def test_completed_assignment_marks_offer_completed(temp_db):
+    # AHB-17 #3: fulfilling the assignment task flips the offer to terminal 'completed'
+    # (the success mirror of the failure re-open); winner's claim stays 'selected'.
+    await db.upsert_agent(temp_db, "poster", "[]")
+    await db.upsert_agent(temp_db, "alice", "[]")
+    offer_id = (await db.post_offer(temp_db, "poster", "work"))["offer_id"]
+    claim = await db.claim_offer(temp_db, "alice", offer_id)
+    # AHB-17 #1: the claim return states the outcomes contract.
+    assert claim["expires_at"] > time.time()
+    assert "inbox" in claim["next"]
+    task_id = (await db.resolve_offer(temp_db, "poster", offer_id, "select",
+                                      claimant_id="alice"))["task_message_id"]
+
+    await db.claim_pending(temp_db, "alice")
+    await db.complete_message(temp_db, task_id, "done")
+
+    o = (await db.list_offers(temp_db, status="completed"))[0]
+    assert o["id"] == offer_id
+    assert o["claimant_id"] == "alice"
+    assert o["claims"][0]["status"] == "selected"
+    # Duplicate/late completion of the same task is a no-op (guard on status='assigned').
+    assert await db._complete_offer_on_task_success(temp_db, task_id) is False
+
+@pytest.mark.asyncio
+async def test_ordinary_task_completion_leaves_board_alone(temp_db):
+    await db.upsert_agent(temp_db, "poster", "[]")
+    await db.upsert_agent(temp_db, "alice", "[]")
+    offer_id = (await db.post_offer(temp_db, "poster", "work"))["offer_id"]
+
+    msg = await db.enqueue_message(temp_db, "poster", "alice", "unrelated task")
+    await db.claim_pending(temp_db, "alice")
+    await db.complete_message(temp_db, msg["message_id"], "done")
+    assert (await db.list_offers(temp_db))[0]["status"] == "open"
 
 @pytest.mark.asyncio
 async def test_ordinary_task_failure_leaves_board_alone(temp_db):

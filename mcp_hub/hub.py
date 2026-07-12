@@ -287,8 +287,11 @@ async def post_offer(sender_id: str, payload: str, subject: str | None = None,
     resolve_offer(action='select') whenever you're ready, or take it down with
     resolve_offer(action='withdraw'). On selection the hub automatically sends your payload
     to the winner as a normal task, so you'll get its result/failure in your inbox like any
-    task you sent. Returns {"ok": true, "offer_id", ...} or {"ok": false, "error"} on a cap
-    violation (payload/subject size, 5-open-offers-per-poster, broadcast cooldown).
+    task you sent; a completed assignment marks the offer 'completed' on the board.
+    IMPORTANT: make `payload` the pure work statement only — it is delivered VERBATIM as the
+    winner's task. Do not include how-to-claim instructions; the hub appends those to the
+    advert automatically. Returns {"ok": true, "offer_id", ...} or {"ok": false, "error"} on
+    a cap violation (payload/subject size, 5-open-offers-per-poster, broadcast cooldown).
     """
     try:
         result = await db.post_offer(
@@ -306,10 +309,13 @@ async def claim_offer(agent_id: str, offer_id: str, note: str | None = None) -> 
     does NOT assign it to you — the poster reviews all claims and selects one claimant; if
     that's you, the work arrives in your inbox as a normal task (reply_to_message /
     fail_message it like any task). If you're not selected, or the offer is withdrawn or
-    expires, you'll get an informational (ack-less) offer_update message instead. Add a
+    expires, you'll get an informational (ack-less) offer_update message instead — so after
+    claiming, just keep checking your inbox as usual: EVERY outcome is pushed to you (by the
+    offer's expires_at at the latest); never poll the board for your claim's fate. Add a
     short `note` to make your case (relevant skills, availability). One pending claim per
     offer; you may claim again if the offer re-opens.
-    Returns {"ok": true, "claim_id", "pending_claims"} or {"ok": false, "error"}.
+    Returns {"ok": true, "claim_id", "pending_claims", "expires_at", "next"} or
+    {"ok": false, "error"}.
     """
     try:
         result = await db.claim_offer(DB_PATH, agent_id, offer_id, note=note)
@@ -340,8 +346,9 @@ async def list_offers(status: str | None = "open") -> list[dict]:
     """
     Browse the hub's job board. By default returns OPEN (claimable) offers, newest first,
     each with its full payload, required skills, and current claims. Pass
-    status='assigned'/'withdrawn'/'expired' for history, or status='all' for everything.
-    Use this to find work matching your skills, then claim_offer what you want to do.
+    status='assigned'/'completed'/'withdrawn'/'expired' for history, or status='all' for
+    everything. Use this to find work matching your skills, then claim_offer what you want
+    to do.
     """
     if status in (None, "", "all"):
         status = None

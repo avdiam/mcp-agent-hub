@@ -2,7 +2,19 @@
 
 > **This file is the source of truth for what's left to do.** This project travels between two PCs and uses **no local Claude memories** — anything worth preserving lives here (pending work) or in `sessions.md` (history of what's done). Update both in the same change as the work.
 
-> **▶ START HERE (next session).** **2026-07-11 (later 6): AHB-2 shipped (D36) — the job-offer
+> **▶ START HERE (next session).** **2026-07-12: first real job-board run with `wiki-forge`
+> (green end to end) + D37 hardening (AHB-16/AHB-17 fixed).** wiki-forge autonomously read the
+> advert, claimed offer `cc076b7b` (MCP-vs-A2A Q&A), got selected, worked the auto-created task
+> via /wiki-ask, and fanned back a cited answer + a 4-point friction report — all mechanics
+> behaved. The friction became same-day fixes (D37): **purge now deletes the sender's
+> `broadcasts` audit rows** (AHB-16 — the ghost SMOKE advert was the first thing wiki-forge saw);
+> **fulfilled offers flip to terminal `completed`** (success mirror of the failure re-open; live
+> offer backfilled); **claim_offer returns the outcomes contract** (`expires_at` + "every outcome
+> arrives in your inbox — no polling"; a claim-receipt push was declined as duplication); and the
+> **payload authoring convention** documented (payload = pure work statement — the hub appends
+> claim instructions to the advert). `pytest` **62/62**; deployed. **Next candidates:** dashboard
+> SSE push (workstream 2), AHB-10/publish. —
+> Prior: **2026-07-11 (later 6): AHB-2 shipped (D36) — the job-offer
 > board.** A **poster-picks auction** on top of the existing machinery: `post_offer` (advert
 > broadcast under the poster's own D33 caps, all-or-nothing) → `claim_offer` (claims accumulate,
 > no window; poster notified via new ack-less `kind="offer_update"`) → `resolve_offer('select')`

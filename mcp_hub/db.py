@@ -145,7 +145,7 @@ async def init_db(db_path="hub.db"):
         await db.execute("CREATE INDEX IF NOT EXISTS idx_broadcasts_sender_created ON broadcasts(sender_id, created_at)")
 
         # Job-offer board (AHB-2): claimable work items with a lifecycle
-        # (open → assigned | withdrawn | expired, re-opened on assignment failure).
+        # (open → assigned → completed | withdrawn | expired; re-opened on assignment failure).
         await db.execute("""
             CREATE TABLE IF NOT EXISTS job_offers (
                 id TEXT PRIMARY KEY,
@@ -237,13 +237,18 @@ async def delete_agent(db_path, agent_id, purge_messages=False):
 
     Option A (default): deletes the agent row only; its historical messages are
     left intact. Option B (purge_messages=True): also deletes every message the
-    agent sent or received, plus its job-board footprint (offers it posted — and
-    their claims — and claims it made on others' offers; AHB-2). Returns a dict
-    with the rows removed from each table.
+    agent sent or received, its job-board footprint (offers it posted — and
+    their claims — and claims it made on others' offers; AHB-2), and its
+    `broadcasts` audit rows (AHB-16: purging deletes recipients' copies of its
+    adverts, so leaving the audit row would make register-time catch-up re-queue
+    ghost adverts for offers that no longer exist; the sender is gone, so its
+    rate-limit history is moot). Returns a dict with the rows removed from each
+    table.
     """
     async with _connect(db_path) as db:
         messages_deleted = 0
         offers_deleted = 0
+        broadcasts_deleted = 0
         if purge_messages:
             cursor = await db.execute(
                 "DELETE FROM messages WHERE sender_id=? OR recipient_id=?",
@@ -256,11 +261,13 @@ async def delete_agent(db_path, agent_id, purge_messages=False):
             )
             cursor = await db.execute("DELETE FROM job_offers WHERE poster_id=?", (agent_id,))
             offers_deleted = cursor.rowcount
+            cursor = await db.execute("DELETE FROM broadcasts WHERE sender_id=?", (agent_id,))
+            broadcasts_deleted = cursor.rowcount
         cursor = await db.execute("DELETE FROM agents WHERE id=?", (agent_id,))
         agents_deleted = cursor.rowcount
         await db.commit()
         return {"agents_deleted": agents_deleted, "messages_deleted": messages_deleted,
-                "offers_deleted": offers_deleted}
+                "offers_deleted": offers_deleted, "broadcasts_deleted": broadcasts_deleted}
 
 @retry_on_lock()
 async def touch_last_seen(db_path, agent_id):
@@ -447,6 +454,11 @@ async def post_offer(db_path, poster_id, payload, subject=None, required_skills=
     broadcast spam share one budget), then inserts the board row. Any cap violation raises
     ValueError and posts nothing. The advert carries a snippet + claim instructions; the
     board row holds the full payload — the advert is the ad, the row is the contract.
+
+    Authoring convention (AHB-17 #2): `payload` should be the PURE WORK STATEMENT — it is
+    delivered verbatim as the winner's task on selection. The hub already appends claim
+    instructions to the advert, so recruitment copy in the payload just becomes boilerplate
+    inside the eventual assignment.
     Returns {"offer_id", "expires_at", "broadcast": {...}}.
     """
     if payload is None or not payload.strip():
@@ -557,7 +569,18 @@ async def claim_offer(db_path, agent_id, offer_id, note=None, max_note=OFFER_MAX
         session_id=offer_id, kind="offer_update", internal=True,
         subject=f"Claim on offer: {offer['subject'] or offer_id[:8]}"[:OFFER_MAX_SUBJECT],
     )
-    return {"claim_id": claim_id, "offer_id": offer_id, "pending_claims": pending}
+    # AHB-17 #1: state the outcomes contract in the return so a claimant knows it never needs
+    # to poll — every terminal outcome pushes to its inbox (the task itself if selected; an
+    # offer_update if rejected / withdrawn / expired), bounded by expires_at.
+    return {
+        "claim_id": claim_id,
+        "offer_id": offer_id,
+        "pending_claims": pending,
+        "expires_at": offer["expires_at"],
+        "next": ("No polling needed: every outcome arrives in your inbox — the work as a normal "
+                 "task if you're selected, or an offer_update if you're not selected / the offer "
+                 "is withdrawn / it expires (by expires_at at the latest)."),
+    }
 
 @retry_on_lock()
 async def resolve_offer(db_path, poster_id, offer_id, action, claimant_id=None):
@@ -671,9 +694,9 @@ async def resolve_offer(db_path, poster_id, offer_id, action, claimant_id=None):
 @retry_on_lock()
 async def list_offers(db_path, status=None, limit=100):
     """Browse the job board (AHB-2): offers newest-first with their claims attached and
-    required_skills parsed back to a list. `status` filters ('open'|'assigned'|'withdrawn'|
-    'expired'); None = all. An open offer past expires_at reads 'expired' here even before
-    the sweep persists that transition."""
+    required_skills parsed back to a list. `status` filters ('open'|'assigned'|'completed'|
+    'withdrawn'|'expired'); None = all. An open offer past expires_at reads 'expired' here
+    even before the sweep persists that transition."""
     now = time.time()
     async with _connect(db_path) as db:
         if status:
@@ -732,6 +755,23 @@ async def expire_offers(db_path):
             subject=f"Expired: {o['subject'] or o['id'][:8]}"[:OFFER_MAX_SUBJECT],
         )
     return len(expired)
+
+@retry_on_lock()
+async def _complete_offer_on_task_success(db_path, task_message_id):
+    """AHB-17 #3: completing a job-board assignment task flips its offer to the terminal
+    'completed' state — the success mirror of _reopen_offer_on_task_failure. Without this a
+    fulfilled job sat 'assigned' on the board forever. Guarded on status='assigned' so a
+    duplicate/late completion is a no-op; no notifications (the poster just received the
+    result on the same session). No-op for ordinary tasks."""
+    now = time.time()
+    async with _connect(db_path) as db:
+        cursor = await db.execute(
+            "UPDATE job_offers SET status='completed', updated_at=? WHERE task_message_id=? AND status='assigned'",
+            (now, task_message_id),
+        )
+        completed = cursor.rowcount > 0
+        await db.commit()
+    return completed
 
 @retry_on_lock()
 async def _reopen_offer_on_task_failure(db_path, task_message_id):
@@ -873,6 +913,8 @@ async def complete_message(db_path, message_id, response):
             kind="result",
             internal=True,
         )
+        # AHB-17 #3: if this task was a job-board assignment, mark the offer fulfilled.
+        await _complete_offer_on_task_success(db_path, message_id)
 
 @retry_on_lock()
 async def fail_message(db_path, message_id, error):

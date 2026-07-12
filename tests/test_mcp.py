@@ -322,12 +322,13 @@ async def test_job_board_tool_roundtrip(test_client):
     assert len(bob_updates) == 1
     assert "not selected" in bob_updates[0]["payload"]
 
-    # Dashboard state carries the board.
+    # Dashboard state carries the board; the fulfilled offer reads terminal 'completed'
+    # (AHB-17 #3 — the task was completed above).
     res_state = await test_client.get("/api/state", headers={"Origin": "http://localhost"})
     assert res_state.status_code == 200
     offers = res_state.json()["offers"]
     assert offers[0]["id"] == offer_id
-    assert offers[0]["status"] == "assigned"
+    assert offers[0]["status"] == "completed"
 
 @pytest.mark.asyncio
 async def test_post_offer_tool_cap_error():

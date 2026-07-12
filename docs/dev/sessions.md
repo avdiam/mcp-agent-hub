@@ -2,6 +2,42 @@
 
 > Append-only log of what was accomplished each session. Pairs with `tasks.md` (what's left). This project travels between two PCs and uses **no local Claude memories** — this file is the durable record. Newest session first.
 
+## 2026-07-12 — First real job-board run with `wiki-forge` + D37 hardening (AHB-16/AHB-17)
+
+The board's first real use, run live with `wiki-forge` (fresh `/agent-hub-live` session), then
+same-day fixes for everything the run surfaced. `pytest` **62/62** (59 → +3).
+
+- **The run (offer `cc076b7b`, "Q&A job: MCP vs A2A"):** posted with `required_skills`
+  [qa, research, citations]; advert fanned to all 4 agents. wiki-forge initially did NOT claim —
+  it hit the stale SMOKE advert first (AHB-16 ghost, see below) and reasoned conservatively
+  about *advertised scope vs capability* (good instinct, wrong blocker). After a direct
+  clarification message it claimed with a strong note, was selected, received the auto-created
+  task, answered via /wiki-ask (MCP = agent-to-tool "down", A2A = agent-to-agent "across",
+  complementary; 5 cited pages, confidence 0.85–0.9), and the result fanned back on
+  `session_id = offer_id`. Full lifecycle green with an independent peer; thread closed both
+  sides. Its 4-point friction report became the work below.
+- **AHB-16 fixed (was: ghost adverts):** purging a broadcaster deletes recipients' advert
+  copies, so the surviving `broadcasts` audit row made register-time catch-up re-queue adverts
+  for offers that no longer existed — wiki-forge's first board impression was yesterday's purged
+  SMOKE advert, indistinguishable from a live offer. Fix: `delete_agent(purge_messages=True)`
+  now also `DELETE FROM broadcasts WHERE sender_id=?` (+ `broadcasts_deleted` in the return);
+  the sender is gone, so its rate-limit history is moot.
+- **AHB-17 fixed (board polish, 3 items):** (#1) claim→selection gap closed by **stating the
+  contract, not adding messages** — every outcome already pushes to the claimant, so
+  `claim_offer` now returns `expires_at` + a `next` string ("every outcome arrives in your
+  inbox — no polling needed"); wiki-forge's claim-receipt-push suggestion declined as pure
+  duplication. (#2) payload authoring convention documented in `post_offer` (db + tool
+  docstrings): payload = the pure work statement, delivered verbatim as the winner's task; the
+  offending recruitment copy was the maintainer's own offer #1. (#3) new terminal **`completed`**
+  offer status via `_complete_offer_on_task_success` hooked into `complete_message` (success
+  mirror of the D36 failure re-open, guarded on `status='assigned'`); dashboard badge added;
+  live `cc076b7b` backfilled post-deploy.
+- **Tests (3 new + 2 updated):** purge-kills-ghost-catch-up; completed-assignment flip (+
+  duplicate-completion no-op + claim-return contract fields); ordinary-completion board no-op;
+  delete_agent return-shape and roundtrip end-state updated.
+- **Docs:** D37 (+ footer), AHB-16/AHB-17 → fixed, `specs.md` (tools 11–14 refinements, offer
+  lifecycle), `architecture.md`, `AGENTS.md` board conventions, `tasks.md` START-HERE.
+
 ## 2026-07-11 (later 6) — AHB-2 shipped (D36): the job-offer board (poster-picks auction)
 
 Directed follow-up after AHB-1 closed: **build AHB-2**. Design confirmed with the user pre-build
