@@ -151,6 +151,11 @@ Build in **phases** (D25): **P1** skeleton + green haiku E2E → **P2** skills/`
   re-vendoring is now `git fetch && checkout <hash>` (closes AHB-10).
 
 ## Possible future / v2 (deferred)
+
+> **Triage & sequencing for this bucket now lives in [`v2-plan.md`](v2-plan.md)** (tracks,
+> recommended order, per-item briefs, gates/triggers — written 2026-07-12). This list stays
+> the source of truth for *status*; consult the plan before picking an item up.
+
 - [ ] **Job board: advisory `claim_window_seconds` on `post_offer` (AHB-19)** — surfaced in
   the advert / board row / `claim_offer` return so claimants know when the poster intends to
   select; advisory only, no enforcement. Idea from dogfood run #2 (first contested auction),

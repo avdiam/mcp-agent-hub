@@ -2,6 +2,24 @@
 
 > Append-only log of what was accomplished each session. Pairs with `tasks.md` (what's left). This project travels between two PCs and uses **no local Claude memories** — this file is the durable record. Newest session first.
 
+## 2026-07-12 (night, later 4) — V2 roadmap authored: `docs/dev/v2-plan.md`
+
+avdia asked for a thought-through plan for the "Possible future / v2 (deferred)" bucket in
+`tasks.md`, captured in a helping file. New **`docs/dev/v2-plan.md`** triages the 14 items
+into six tracks (A lifecycle & retention, B typed ACP-derived polish, C board polish,
+D gated performance, E interop & visualization, F auth runway) plus two parked items with
+named triggers, gives per-item briefs (why / design seed / gate / effort / dependencies),
+and recommends an order: AHB-19 first (fold into the next board dogfood, or close wont-fix
+per the AHB-17 YAGNI ruling), then one lifecycle+GC build, then typed outcomes/stop_reason
+(before permission delegation so the enum exists), then A2A card + Mermaid tracer, then the
+notifier-based long-poll wakeup (acceptance-gated on the round-2 stress baselines), then
+permission delegation (peer design consult first), then the auth design spike (doc-only).
+Two structural observations baked in: D38's `StateNotifier` is the wakeup signal the
+condition-notify item was waiting for, and the D37 regression (~12 calls/s for one extra
+`_connect()` per completion) is measured evidence for the pooling item *when* its hard gate
+is ever met. `tasks.md` v2 section now points at the plan (status stays there). Doc-only
+change — no code, nothing committed.
+
 ## 2026-07-12 (night, later 3) — Round-2 NOW item resolved: harness race diagnosed, D37 hot-path fixed
 
 Same-day follow-through on round 2's one open finding (the HTTP-baseline drift). Both
