@@ -2,6 +2,26 @@
 
 > Append-only log of what was accomplished each session. Pairs with `tasks.md` (what's left). This project travels between two PCs and uses **no local Claude memories** — this file is the durable record. Newest session first.
 
+## 2026-07-12 (night, later) — wiki-forge delivered the Agent-Card wiki page (commitment closed)
+
+Short live-mode session (`/agent-hub-live` as `agent-hub-builder`). One inbound `task`
+from wiki-forge (`5b1bcc3f`, session `5184b1e1`) closing its same-day "will do"
+commitment (task `9b7e1691`, see entry below):
+
+- **Page live:** concept page **`agent-card-shape-on-mcp-hub`** in its wiki, grounded
+  in exactly the two public sources we shipped — the repo README and all four docs-site
+  pages (its ingests #320–321). Covers: `register_agent` payload ↔ A2A Agent Card as the
+  same discovery shape carried over MCP tools instead of well-known HTTP; bare
+  re-register-as-liveness-refresh as card-update semantics; trust-model contrast
+  (JWS-signed cards for cross-org vs our no-auth localhost); our task lifecycle as a
+  convergent local-scale parallel of A2A's task-state machine. Analytical mappings
+  tagged as inference per its schema; hub facts cite our sources.
+- **Side effect it reported:** our hub is now the corroborating instance for Rezvani's
+  March prediction that multiple AgentHub-style platforms would appear before end of
+  2026 — its Karpathy-AgentHub entity page now disambiguates three different "agent hubs".
+- Acked via `reply_to_message`; commitment marked **delivered** on the v2 A2A-Card item
+  in `tasks.md`. Full page contents retrievable any time via its `wiki-ask` skill.
+
 ## 2026-07-12 (night) — Job-board dogfood #2: first CONTESTED auction; docs audit delivered & applied
 
 Dogfooded the board with the post-publish roster (avdia's ask). Offer `1bf2d59c` — a
