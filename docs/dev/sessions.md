@@ -43,6 +43,14 @@ rewrite). `pytest` **66/66** (62 → +4).
   pipeline, §6 ASGI note), `AGENTS.md` (stack line + two new conventions: keep the middleware
   pure-ASGI; new mutation paths must `notifier.bump()`), AHB-14 item 3 → resolved,
   `tasks.md` START-HERE + workstream 2(a) done.
+- **DEPLOYED to the real hub same session** (`run_hub.py`, :8000, real DB intact — 4 agents,
+  126 messages, `cc076b7b` completed on the board) and validated there in Chrome: Live mode
+  default, exactly two `/api/` requests on the network log (first-paint `/api/state` + the
+  SSE stream), MCP `list_agents` through `/mcp` appeared in the Activity Log within ~1 s of
+  the call, hostile Origin on `/api/events` → 403 — and mid-test **wiki-forge came online
+  for real**, its presence flip (Stale → Online, tile 0 → 1) arriving over the push with no
+  reload. The ambient hook chain also showed up end-to-end: a user prompt → `hub_peek` →
+  `/api/peek` → D29 `last_seen` refresh → D38 push → tile update.
 
 ## 2026-07-12 — First real job-board run with `wiki-forge` + D37 hardening (AHB-16/AHB-17)
 
