@@ -988,8 +988,12 @@ async def test_completed_assignment_marks_offer_completed(temp_db):
     assert o["id"] == offer_id
     assert o["claimant_id"] == "alice"
     assert o["claims"][0]["status"] == "selected"
-    # Duplicate/late completion of the same task is a no-op (guard on status='assigned').
-    assert await db._complete_offer_on_task_success(temp_db, task_id) is False
+    # Duplicate/late completion of the same task is a no-op (guard on status='assigned'):
+    # the offer stays terminal 'completed' and the winning claim stays 'selected'.
+    await db.complete_message(temp_db, task_id, "done again")
+    o = (await db.list_offers(temp_db, status="completed"))[0]
+    assert o["id"] == offer_id
+    assert o["claims"][0]["status"] == "selected"
 
 @pytest.mark.asyncio
 async def test_ordinary_task_completion_leaves_board_alone(temp_db):

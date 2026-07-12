@@ -2,6 +2,36 @@
 
 > Append-only log of what was accomplished each session. Pairs with `tasks.md` (what's left). This project travels between two PCs and uses **no local Claude memories** — this file is the durable record. Newest session first.
 
+## 2026-07-12 (night, later 3) — Round-2 NOW item resolved: harness race diagnosed, D37 hot-path fixed
+
+Same-day follow-through on round 2's one open finding (the HTTP-baseline drift). Both
+halves closed:
+
+- **"Recipient unknown" (37/1200) = harness startup race, NOT a hub change.** The
+  reject-unknown-recipient guard predates round 1 (verified present at `060e77d`).
+  Instrumenting the harness showed every failure at `op=0`: worker *i*'s first
+  `send_message` racing worker *i+1*'s first `register_agent` in the ring; the count is
+  wildly timing-sensitive (7, 41, 0 across identical runs — round 1's clean 1200/1200
+  was luck, not protection). `http_loadtest.py` gained op-index error logging and a
+  `--preregister` barrier flag; with the barrier: **1200/1200, 0 errors, every run**.
+- **Throughput: bisected to D37 via git worktrees** (identical harness, same machine,
+  same evening): R1 `060e77d` 76.3 — replicating June's 76.1 almost exactly — pre-D35
+  78.7, D35 76.7, D36 77.1, **D37 64.8**. Root cause: AHB-17 #3's
+  `_complete_offer_on_task_success` ran on EVERY task completion but opened its own
+  `_connect()` (a fresh aiosqlite thread + WAL handshake — the exact cost the deferred
+  pooling item warns about) just to execute an UPDATE that matches 0 rows for ordinary
+  tasks. **Fix:** the offer-flip UPDATE now runs inside `complete_message`'s
+  already-held connection/transaction (also atomic with the completion now); the
+  standalone helper deleted; the `status='assigned'` duplicate-completion guard kept;
+  the direct-helper test reworked to assert through `complete_message`. `pytest` 67/67.
+- **Honest residual:** post-fix HEAD measured 69–71 calls/s vs D36 remeasured 68.3
+  back-to-back — i.e. remaining "drift" is within this box's run noise tonight (±5–9
+  calls/s with the live hub + agents running); antigravity-2's 62.4 was likely
+  concurrency-depressed. p50 actually improved vs round 1 (452–463 ms vs 525).
+- **Still open for round 3:** writer-contention baseline (round 2 saw 41 ops/s, no
+  round-1 reference). ⚠️ The live `:8000` hub keeps running pre-fix code until
+  restarted.
+
 ## 2026-07-12 (night, later 2) — Stress-test round 2: ALL GREEN across three phases (3-agent effort)
 
 Round 2 of load/correctness testing (avdia-approved full scope), coordinated entirely

@@ -759,23 +759,6 @@ async def expire_offers(db_path):
     return len(expired)
 
 @retry_on_lock()
-async def _complete_offer_on_task_success(db_path, task_message_id):
-    """AHB-17 #3: completing a job-board assignment task flips its offer to the terminal
-    'completed' state — the success mirror of _reopen_offer_on_task_failure. Without this a
-    fulfilled job sat 'assigned' on the board forever. Guarded on status='assigned' so a
-    duplicate/late completion is a no-op; no notifications (the poster just received the
-    result on the same session). No-op for ordinary tasks."""
-    now = time.time()
-    async with _connect(db_path) as db:
-        cursor = await db.execute(
-            "UPDATE job_offers SET status='completed', updated_at=? WHERE task_message_id=? AND status='assigned'",
-            (now, task_message_id),
-        )
-        completed = cursor.rowcount > 0
-        await db.commit()
-    return completed
-
-@retry_on_lock()
 async def _reopen_offer_on_task_failure(db_path, task_message_id):
     """AHB-2 lifecycle: a failed assignment hands the offer back to the board (within TTL)
     so other agents can claim it; past TTL it expires instead. The winning claim flips
@@ -902,7 +885,20 @@ async def complete_message(db_path, message_id, response):
             if parent and parent["status"] == "input_required":
                 new_context = (parent["context"] or "") + f"\n[Clarification Answer]: {response}"
                 await db.execute("UPDATE messages SET status='pending', claimed_at=NULL, context=?, updated_at=? WHERE id=?", (new_context, now, row["parent_id"]))
-            
+
+        if row["kind"] == "task":
+            # AHB-17 #3: if this task was a job-board assignment, flip its offer to terminal
+            # 'completed' (success mirror of _reopen_offer_on_task_failure). Guarded on
+            # status='assigned' so a duplicate/late completion is a no-op; matches no row for
+            # ordinary tasks. MUST run on the connection already held: a separate helper
+            # opening its own _connect() per completion (a new thread + WAL handshake each
+            # time) measurably cost throughput at 24-worker load (stress round 2 NOW item,
+            # 2026-07-12 — see sessions.md).
+            await db.execute(
+                "UPDATE job_offers SET status='completed', updated_at=? WHERE task_message_id=? AND status='assigned'",
+                (now, message_id),
+            )
+
         await db.commit()
         
     if row["kind"] == "task":
@@ -918,8 +914,6 @@ async def complete_message(db_path, message_id, response):
             kind="result",
             internal=True,
         )
-        # AHB-17 #3: if this task was a job-board assignment, mark the offer fulfilled.
-        await _complete_offer_on_task_success(db_path, message_id)
 
 @retry_on_lock()
 async def fail_message(db_path, message_id, error):

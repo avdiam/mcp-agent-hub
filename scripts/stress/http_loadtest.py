@@ -101,7 +101,7 @@ async def run_worker(worker_id: int, n_workers: int, ops_per_worker: int, url: s
                 if _is_locked(e):
                     stats["lock_errors"] += 1
                 else:
-                    stats["other_errors"].append(str(e))
+                    stats["other_errors"].append(f"op={op}: {e}")
                 # Small sleep on error to avoid tight error looping
                 await asyncio.sleep(0.01)
 
@@ -118,6 +118,9 @@ async def main():
     parser.add_argument("--workers", type=int, default=24, help="Number of concurrent workers")
     parser.add_argument("--ops", type=int, default=50, help="Operations per worker")
     parser.add_argument("--port", type=int, default=8100, help="Port to run the isolated server on")
+    parser.add_argument("--preregister", action="store_true",
+                        help="Register every worker id once before the loop starts, closing the "
+                             "op-0 ring race (worker i sending to worker i+1 before its first register)")
     args = parser.parse_args()
     
     # 1. Setup isolated environment
@@ -185,6 +188,12 @@ async def main():
     latencies = []
     claimed_msg_ids = set()
     
+    if args.preregister:
+        print("Pre-registering all worker ids...")
+        async with Client(url) as client:
+            for i in range(args.workers):
+                await client.call_tool("register_agent", {"agent_id": f"worker_{i}"})
+
     print(f"Starting load test: workers={args.workers}, ops_per_worker={args.ops}...")
     t0 = time.perf_counter()
     
