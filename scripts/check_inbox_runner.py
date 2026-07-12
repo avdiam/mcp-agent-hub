@@ -1,7 +1,7 @@
 """Peek at an agent's inbox by calling the hub in-process (no running server needed).
 
-This is a local debugging/inspection utility. Unlike scripts/check_messages.py --
-which talks to a *running* hub over the MCP HTTP protocol -- this script imports
+This is a local debugging/inspection utility: instead of talking to a *running*
+hub over the MCP HTTP protocol, this script imports
 mcp_hub.hub directly and calls check_inbox() in the current process. That means it
 reads the hub's SQLite database (hub.db) straight off disk, so it works even when
 the server is stopped.
