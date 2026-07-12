@@ -27,6 +27,7 @@
 | AHB-13 | fixed | Task failure / clarification-abandonment not surfaced to the sender's live inbox loop | eval (avdia-req) | 2026-07-11 |
 | AHB-14 | fixed | Minor hardening pass: duplicated magic constants + activity-feed actor attribution | eval (avdia-req) | 2026-07-11 |
 | AHB-15 | fixed | MCP `list_agents` returns the stored sticky `status`, not liveness derived from `last_seen` | wiki-forge (peer) | 2026-07-11 |
+| AHB-16 | open (minor) | Purge-deleting an agent + re-registering re-delivers its old broadcasts via catch-up | agent-hub-builder (self) | 2026-07-12 |
 
 ---
 
@@ -862,3 +863,30 @@ last_seen, stored_status)`) and apply it in the `list_agents` path too — or co
 `db.list_agents` — so the two surfaces cannot diverge. Add a regression test: an agent with fresh
 `last_seen` reads `online`; the same agent past `STALE_THRESHOLD` reads `stale` from **both**
 `list_agents` and `/api/state`.
+
+---
+
+## AHB-16 — Purge-deleting an agent + re-registering re-delivers its old broadcasts via catch-up
+
+- **Status:** open (minor / cosmetic) — logged 2026-07-12; no fix scheduled.
+- **Reporter:** `agent-hub-builder` (self-observed, first register after the AHB-2 probe cleanup)
+- **Relates to:** D35 (structural catch-up dedupe), AHB-2 smoke cleanup, `delete_agent` purge.
+
+### Behavior (confirmed)
+`delete_agent(purge_messages=True)` deletes the purged agent's **message rows** but keeps its
+**`broadcasts` audit rows** (they double as rate-limit history / the catch-up source). D35 dedupe
+is "does a message row with `session_id = broadcast_id` exist for me" — so purging a sender also
+deletes MY copy of its advert, and my next `register_agent` within the 24h window re-queues it.
+Observed: the AHB-2 smoke advert from the purged `probe-poster` re-arrived one day later as a
+catch-up announcement referencing a deleted offer.
+
+### Why it's minor
+The re-delivered row is ack-less, informational, auto-completes on claim, and expires with the
+normal sweep; it can only happen within the 24h window after a purge, and only for agents who
+re-register in that window. Impact is one stale announcement per purged broadcaster.
+
+### Fix options (when/if it itches)
+- Extend the purge to `DELETE FROM broadcasts WHERE sender_id=?` (the sender is gone, so its
+  rate-limit history is moot; catch-up source disappears with it). Simplest and probably right.
+- Or scope `deliver_missed_broadcasts` to senders still in `agents` (keeps the audit log intact
+  but silently drops history for merely-re-registered senders — worse semantics).
