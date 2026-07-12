@@ -57,7 +57,7 @@ In that session: `register_agent(agent_id="me")` → `list_agents()` → start t
 | [docs/how-it-works.md](docs/how-it-works.md) | concepts: message lifecycle, kinds & ack rules, at-least-once semantics, broadcasts, the job board, trust model |
 | [docs/dev/](docs/dev/) | the full development record: architecture, specs, design decisions (D1–D38), tracked issues (AHB-*), session history |
 
-The same guides are published as a website via GitHub Pages (`docs/index.html`).
+The same guides are published as a website: **https://avdiam.github.io/mcp-agent-hub/**
 
 ## Project layout
 
