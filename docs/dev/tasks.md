@@ -2,7 +2,17 @@
 
 > **This file is the source of truth for what's left to do.** This project travels between two PCs and uses **no local Claude memories** — anything worth preserving lives here (pending work) or in `sessions.md` (history of what's done). Update both in the same change as the work.
 
-> **▶ START HERE (next session).** **2026-07-12 (evening): PUBLISHED — AHB-10 closed, the
+> **▶ START HERE (next session).** **2026-07-12 (night): STRESS ROUND 2 — ALL GREEN (3-agent).**
+> Task A (antigravity-2): db gate PASS (784 claims/s, 0 double-claims/lock errors); HTTP baseline
+> 1163/1200 @ 62.4 calls/s (vs 76.1 round-1) with **37 "Recipient unknown" send failures — the
+> round's open follow-up (see NOW item below)**; new `broadcast_stress.py` (`3916393`): caps atomic
+> under 50-way race, all-or-nothing fan-out, D35 catch-up exactly-once all PASS. Task B
+> (antigravity): board claim-race + re-open path all-PASS @ 24 concurrent claimers; SSE/D38 first
+> load test — debounce coalesced 454 mutations → ~34 pushes, 0 drops, ~0 overhead; new
+> `board_stress.py`. Phase B live 3-peer exercise (wiki-forge/antigravity-2/builder): zero
+> duplicates/redeliveries/cross-talk across ~31 tasks of simultaneous long-polls. Details in the
+> newest `sessions.md` entry. —
+> Prior: **2026-07-12 (evening): PUBLISHED — AHB-10 closed, the
 > last open issue.** The repo is public at **https://github.com/avdiam/mcp-agent-hub** (MIT)
 > with a GitHub Pages docs site at **https://avdiam.github.io/mcp-agent-hub/** (static HTML
 > served from `docs/`; remember: push to `master` auto-redeploys it). Pre-publish pass:
@@ -149,6 +159,7 @@ Build in **phases** (D25): **P1** skeleton + green haiku E2E → **P2** skills/`
 - [ ] **Persisted `events` table** + retention/purge for the activity log (v1 is an in-memory ring buffer — D22); general retention/cleanup of old `completed`/`failed`/`expired` rows + session GC — including the one *invisible* growth vector terminal-row GC misses: an abandoned `pending kind='result'` (requester never re-checks its inbox) and a never-read `input_request`, which the D24 carve-out leaves `pending` forever in v1 (no correctness impact — `check_status` stays the durable read; prefer GC/delete over a `state=expired` patch). *(Surfaced in the 2026-06-16 eval triage; kept v2 rather than escalated into D24.)*
 - [ ] Stop/AfkStop hook variant that auto-continues an agent's loop on pending work (beyond the basic peek-nudge) — D19, agy `auto_continue_on_max_generator_invocations`.
 - [ ] **ACP-derived polish (optional)** — from the 2026-06-16 Agent Client Protocol eval (`mem/acp-evaluation.md`): a **typed cancel/reject `outcome`** for a clarification (sender abandons a parked `input_required` task, vs only answering it — borrowed from ACP `session/request_permission`); a **typed `stop_reason`/fail-category enum** on `failed`/`expired` rows for the dashboard (vs free-text `error`); and **MCP `ContentBlock`** as the shape to adopt *if* multimodal payloads ever matter (v1 keeps `str`). None reopen D1–D25.
+- [ ] **NOW — diagnose stress-round-2 HTTP baseline drift** (2026-07-12): 37× `"Recipient unknown"` on `send_message` (37/1200 = 3%; round 1 had 0), throughput 62.4 vs 76.1 calls/s (-18%), p95 1818 vs 1443 ms (+26%) — same harness (`http_loadtest.py --workers 24 --ops 50`), HEAD vs 2026-06-18 code. Hypotheses: (a) harness ring race (worker i sends to worker i+1 before it registers) amplified by faster claims (p50 improved 525→458), (b) a real behavior change in recipient validation/fan-out cost since D31–D38. Repro locally, bisect if (b). Also: writer-contention scenario reported 41 ops/s with no round-1 reference — record a baseline for round 3.
 - [ ] **Leverage Multi-Agent Framework Concepts (v2 design ready)** — implement features analyzed in [leveraging_multi_agent_frameworks.md](file:///C:/Users/30697/Documents/Projects/mcp-agent-hub-agy/docs/dev/mem/leveraging_multi_agent_frameworks.md):
   - **Git-Native Task Helpers:** Create a script utility to wrap `git diff` and packages task payloads with commit hashes/diff patches.
   - **Dashboard Visual Tracer:** Incorporate Mermaid.js into `index.html` to render session message histories as interactive dependency graphs.

@@ -2,6 +2,45 @@
 
 > Append-only log of what was accomplished each session. Pairs with `tasks.md` (what's left). This project travels between two PCs and uses **no local Claude memories** — this file is the durable record. Newest session first.
 
+## 2026-07-12 (night, later 2) — Stress-test round 2: ALL GREEN across three phases (3-agent effort)
+
+Round 2 of load/correctness testing (avdia-approved full scope), coordinated entirely
+over the hub from this session. Round 1 (2026-06-18) covered the core loop; round 2
+covered everything shipped since (D31/D33/D35/D36/D37/D38) plus a live-peer exercise
+round 1 never had. Synthetic load ran ONLY against isolated instances (ports 8100/8101,
+temp DBs); the live :8000 hub carried coordination + Phase B at normal rates.
+
+- **Task A (antigravity-2) — baseline regression + broadcast/caps harness:**
+  - db gate: PASS — 0 double-claims / 0 lost, 784 claims/s (vs 828 round-1, negligible),
+    0 lock errors.
+  - HTTP baseline at HEAD: 1163/1200 loops (vs 1200/1200), **62.4 calls/s vs 76.1
+    (-18%)**, p50 458 ms (improved from 525), **p95 1818 ms vs 1443 (+26%)**, 0 lock
+    errors, and **37 "Recipient unknown" send_message failures** — logged as the round's
+    main follow-up (harness ring-race amplified by faster claims, or a real behavior
+    change since D31–D38? undiagnosed).
+  - NEW `scripts/stress/broadcast_stress.py` (committed by antigravity-2, `3916393`):
+    caps atomic under a 50-way concurrent race (1 admitted / 49 rejected, no
+    over-admission), all-or-nothing fan-out PASS, no double-deliveries, D35 register-time
+    catch-up exactly-once PASS; 838.5 ms for 50 attempts.
+- **Task B (antigravity) — job-board claim race + SSE under churn:** PASS on all
+  assertions. 24 concurrent claimers on one offer → exactly one winner with the
+  auto-task (`session_id = offer_id`), losers all got `offer_update`, post-selection
+  claims 400'd cleanly, no lost/dup claims; re-open path green end-to-end (fail →
+  re-open → second select → `completed`). SSE (D38, first time under load): 454 state
+  mutations coalesced to ~34 pushes/watcher (250 ms debounce = >92% reduction), 0
+  drops/reconnect errors, throughput delta with watchers attached +5% (noise), 0 lock
+  errors. NEW `scripts/stress/board_stress.py` (landed by builder — antigravity
+  disconnected right after reporting, before committing).
+- **Phase B — live 3-peer concurrency exercise** (wiki-forge + antigravity-2 + builder;
+  antigravity dropped offline post-report, roster corrected mid-flight): ~31 mini-tasks
+  + control tasks + all results exchanged in ~4 min of simultaneous long-polls.
+  **Zero duplicate ids, zero redeliveries, zero cross-talk** (wiki-forge verified every
+  result's `parent_id` matched one of its sends); all 10/10 + 10/10 + 11/11 fan-backs
+  arrived. Batched-vs-single result delivery observed as sender pacing, not an anomaly.
+- **Follow-ups (logged in `tasks.md`):** diagnose the Recipient-unknown/-18%/p95 drift
+  vs round 1; writer-contention scenario reported 41 ops/s with no round-1 reference —
+  baseline it next round.
+
 ## 2026-07-12 (night, later) — wiki-forge delivered the Agent-Card wiki page (commitment closed)
 
 Short live-mode session (`/agent-hub-live` as `agent-hub-builder`). One inbound `task`
