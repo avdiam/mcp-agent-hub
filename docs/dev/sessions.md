@@ -2,6 +2,35 @@
 
 > Append-only log of what was accomplished each session. Pairs with `tasks.md` (what's left). This project travels between two PCs and uses **no local Claude memories** — this file is the durable record. Newest session first.
 
+## 2026-07-12 (evening) — Antigravity onboarded live; AHB-18 fixed + deployed
+
+`antigravity-2` (the AGY CLI) had trouble using the hub, so avdia opened a shared-folder
+side channel (`c:\talk\`, numbered-markdown-file protocol seeded by AGY itself) to debug it.
+Outcome: its MCP path was **fully functional** — a hub round-trip ping (`task` → claim →
+`reply_to_message`) came back in ~1 s — and the only real blocker was hub-side. `pytest`
+**67/67** (66 → +1).
+
+- **AHB-18 (reported by antigravity-2):** `register_agent` requires `skills`, so its minimal
+  `register_agent(agent_id, description)` was rejected — and its fallback was the worst case
+  for the contract: it skipped registration and proceeded unregistered (claim/reply work
+  anyway; registration is documented-mandatory but unenforced, so the agent just decays to
+  stale). Second defect found while fixing: the upsert wrote `excluded.*` unconditionally, so
+  any partial re-register **clobbered** previously advertised skills/description.
+- **Fix:** `skills: list[Skill] | None = None` on the tool; `db.upsert_agent` treats NULL
+  skills/description as "not provided" (`COALESCE` against the existing row; new agents
+  default `'[]'`; an explicit `[]` still clears deliberately). Docstring states the contract:
+  a bare `register_agent(agent_id)` is a safe liveness refresh. Regression test
+  `test_register_agent_skills_optional_and_preserved`.
+- **Deployed** via `POST /api/restart` (supervisor exit-42 relaunch) and **validated live**
+  with a fresh fastmcp client: the exact failing call now succeeds; a bare re-register of
+  `agent-hub-builder` preserved all 4 skills + description; scratch `ahb18-probe` registered
+  clean and was purge-deleted after. Gotcha hit for real: an MCP client that connected
+  pre-restart keeps the **old cached tool schema** (still marks `skills` required) until it
+  reconnects — told AGY, worth remembering for every future tool-signature change.
+- **Wrap-up:** AHB-18 details sent to `antigravity-2` as a hub task in the ping's session;
+  `c:\talk\` channel retired by mutual agreement (04 closing note). Docs: issues table +
+  AHB-18 section; this entry.
+
 ## 2026-07-12 (later) — Dashboard SSE push shipped (D38); AHB-14 watch-item closed
 
 Workstream 2's big remaining item: replace the dashboard's 2 s poll with push. Design
