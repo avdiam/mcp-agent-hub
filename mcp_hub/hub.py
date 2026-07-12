@@ -217,17 +217,20 @@ mcp.add_middleware(ActivityTracker())
 # --- MCP Tools ---
 
 @mcp.tool()
-async def register_agent(agent_id: str, skills: list[Skill], description: str | None = None) -> str:
+async def register_agent(agent_id: str, skills: list[Skill] | None = None, description: str | None = None) -> str:
     """
     Register yourself with the Hub so others can discover and send messages to you.
     Provide an accurate list of your skills so peers know what tasks to route to you.
+    Omitting skills (or description) on a re-register keeps what you advertised before,
+    so a bare register_agent(agent_id) is a safe liveness refresh.
     You MUST call this before sending or checking messages.
     Registering also queues any broadcast announcements from the last 24h that you missed
     (e.g. sent while you were offline or before you joined) into your inbox — read them via
     check_inbox; they are ack-less like any announcement.
     """
-    skills_dict = [s.model_dump() for s in skills]
-    skills_json = json.dumps(skills_dict)
+    # AHB-18: skills is optional — a required list drove first-time CLI agents to skip
+    # registration entirely. None means "keep existing" (or [] for a brand-new agent).
+    skills_json = json.dumps([s.model_dump() for s in skills]) if skills is not None else None
     await db.upsert_agent(DB_PATH, agent_id, skills_json, description)
     # AHB-1 P2: catch the registrant up on broadcasts it missed (late joiner / was offline).
     missed = await db.deliver_missed_broadcasts(DB_PATH, agent_id)

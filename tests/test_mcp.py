@@ -5,7 +5,7 @@ import asyncio
 from httpx import ASGITransport, AsyncClient
 
 from mcp_hub.hub import app, DB_PATH
-from mcp_hub.hub import register_agent, send_message, check_inbox, reply_to_message, check_status, request_input, broadcast_message, list_agents, post_offer, claim_offer, resolve_offer, list_offers
+from mcp_hub.hub import register_agent, send_message, check_inbox, reply_to_message, check_status, request_input, broadcast_message, list_agents, post_offer, claim_offer, resolve_offer, list_offers, Skill
 import mcp_hub.db as db
 
 @pytest_asyncio.fixture
@@ -147,6 +147,21 @@ async def test_mcp_tool_roundtrip():
     status = await check_status(msg_id)
     assert status["status"] == "completed"
     assert status["response"] == "done"
+
+@pytest.mark.asyncio
+async def test_register_agent_skills_optional_and_preserved():
+    # AHB-18: a bare register_agent(agent_id) must work — a required skills list drove
+    # first-run CLI agents to skip registration — and a skill-less re-register must
+    # refresh liveness without clobbering the previously advertised skills/description.
+    await register_agent("newcomer")
+    agents = {a["id"]: a for a in await list_agents()}
+    assert json.loads(agents["newcomer"]["skills"]) == []
+
+    await register_agent("veteran", [Skill(id="s1", name="Skill One", description="does things")], "a peer")
+    await register_agent("veteran")
+    agents = {a["id"]: a for a in await list_agents()}
+    assert [s["id"] for s in json.loads(agents["veteran"]["skills"])] == ["s1"]
+    assert agents["veteran"]["description"] == "a peer"
 
 @pytest.mark.asyncio
 async def test_register_agent_catches_up_missed_broadcasts():

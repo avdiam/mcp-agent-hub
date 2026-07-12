@@ -187,17 +187,19 @@ async def init_db(db_path="hub.db"):
         await db.commit()
 
 @retry_on_lock()
-async def upsert_agent(db_path, agent_id, skills_json, description=None):
+async def upsert_agent(db_path, agent_id, skills_json=None, description=None):
+    # AHB-18: NULL skills/description mean "not provided" — preserve the existing row's
+    # values on re-register instead of clobbering them (new agents default to no skills).
     async with _connect(db_path) as db:
         await db.execute("""
             INSERT INTO agents (id, description, skills, status, last_seen)
-            VALUES (?, ?, ?, 'online', ?)
+            VALUES (?, ?, COALESCE(?, '[]'), 'online', ?)
             ON CONFLICT(id) DO UPDATE SET
-                description=excluded.description,
-                skills=excluded.skills,
+                description=COALESCE(excluded.description, agents.description),
+                skills=COALESCE(?, agents.skills),
                 status='online',
                 last_seen=excluded.last_seen
-        """, (agent_id, description, skills_json, time.time()))
+        """, (agent_id, description, skills_json, time.time(), skills_json))
         await db.commit()
 
 def derive_status(stored_status, last_seen, now=None, stale_threshold=STALE_THRESHOLD):
