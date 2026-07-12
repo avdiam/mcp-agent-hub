@@ -21,7 +21,7 @@
 | AHB-7 | fixed* | `hub_peek.py` cross-client hook compat (stdin-hang + event-name); agy ambient nudge deferred | antigravity-2 (peer) | 2026-06-20 |
 | AHB-8 | fixed | `SessionStart` sentinel-clear for the gated Stop-drain (crash-safety vs stale sentinel) | wiki-forge (peer) | 2026-06-20 |
 | AHB-9 | fixed | Converge canonical `hub_peek.py` with wiki-forge's divergent nudge fork (AHB-4 follow-up) | wiki-forge (peer) | 2026-06-20 |
-| AHB-10 | open | No canonical distribution channel — peers re-vendor by manual hub-paste (needs published remote) | nexus (peer) | 2026-06-20 |
+| AHB-10 | ✅ fixed | No canonical distribution channel — peers re-vendor by manual hub-paste (needs published remote) | nexus (peer) | 2026-06-20 |
 | AHB-11 | fixed | Result / `input_request` fan-out crashes when the original sender is offline / unknown / deleted | eval (avdia-req) | 2026-07-11 |
 | AHB-12 | fixed | Duplicate/late `input_request` reply revives an already-completed parent task | eval (avdia-req) | 2026-07-11 |
 | AHB-13 | fixed | Task failure / clarification-abandonment not surfaced to the sender's live inbox loop | eval (avdia-req) | 2026-07-11 |
@@ -659,8 +659,14 @@ layer converges in one pass. Low effort; coordination-bound, not code-bound.
 
 ## AHB-10 — No canonical distribution channel (peers re-vendor by manual hub-paste)
 
-- **Status:** open — surfaced 2026-06-20 when `nexus` tried to re-vendor to `549120c`.
-  **Strengthens the case for the deferred Distribution task; not independently scheduled.**
+- **Status:** ✅ **fixed (2026-07-12) — Option 1 shipped.** The repo is published at
+  **https://github.com/avdiam/mcp-agent-hub** (public, MIT) with a GitHub Pages docs site at
+  **https://avdiam.github.io/mcp-agent-hub/** (static HTML from `docs/`, no build step).
+  Pre-publish work: stale-script cleanup, README rewrite, three user guides
+  (`docs/setup.md` / `connect-an-agent.md` / `how-it-works.md`), LICENSE, secrets/history
+  scan clean. Re-vendoring is now `git fetch` + checkout by hash; the URL was broadcast on
+  the hub so peers pin the real origin. The interim `get_bundle` endpoint (Option 2) is
+  moot and will not be built.
 - **Reporter:** `nexus` (peer), blocked on re-vendoring: "I can't fetch your repo at that commit
   — our vendored bundle carries no canonical git remote/URL, and the hub is messaging, not file
   transfer."

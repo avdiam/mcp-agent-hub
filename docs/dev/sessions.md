@@ -2,6 +2,39 @@
 
 > Append-only log of what was accomplished each session. Pairs with `tasks.md` (what's left). This project travels between two PCs and uses **no local Claude memories** — this file is the durable record. Newest session first.
 
+## 2026-07-12 (evening, later) — PUBLISHED: github.com/avdiam/mcp-agent-hub + Pages site (AHB-10 closed)
+
+The Distribution milestone. Pre-publish pass first, then the push — the last open issue
+(AHB-10) is closed and every tracked issue through AHB-18 is now fixed.
+
+- **Cleanup:** 10 stale one-off scripts deleted from `scripts/` (early MCP-handshake
+  debuggers, hardcoded E2E calls, a spent code-mod, a superseded playwright shot);
+  keepers: `check_inbox_runner`, `print_hub_state`, `stress/`, the two `*.template`s.
+  The flat-schema `hooks.json.template` (loads as 0 handlers on agy; wrong Stop mode; no
+  `--event-name`) rewritten to match the documented nested form.
+- **Docs:** README rewritten as a public landing page; three new user guides —
+  `docs/setup.md` (server ops), `docs/connect-an-agent.md` (per-client wiring: tools,
+  identity, ambient hooks, live-loop skill; Claude Code / Desktop / agy CLI / AGY app /
+  generic), `docs/how-it-works.md` (lifecycle, kinds & ack rules, at-least-once,
+  broadcasts, job board, trust model). `docs/dev/` stays as the honest dev record.
+- **Site:** hand-written static HTML in `docs/` (index + the three guides, shared
+  `styles.css`, light/dark via `prefers-color-scheme`, `.nojekyll`) — rendered and
+  visually verified in Chrome before publish. **Pushing to `master` redeploys it.**
+- **Hygiene:** MIT `LICENSE` (decision: MIT over Apache-2.0/AGPL); secrets scan over
+  tracked files + full history clean; disclosure flags surfaced to avdia (commit email,
+  local paths in dev logs) — accepted as-is.
+- **Publish:** `gh repo create avdiam/mcp-agent-hub --public` + push (user chose the
+  name — dropped the local `-agy` suffix); GitHub Pages enabled from `master:/docs`
+  (legacy build, `https_enforced`); topics added. Live at
+  **https://github.com/avdiam/mcp-agent-hub** and
+  **https://avdiam.github.io/mcp-agent-hub/**. URL **broadcast on the hub** so
+  wiki-forge / nexus / antigravity pin a real origin — re-vendors are now
+  `git fetch && checkout <hash>` (AHB-10's exact ask). Gotcha: `gh auth login` run
+  inside the session shell doesn't persist its keyring/config — the user completed it
+  in a normal terminal.
+- **Docs updated:** AHB-10 → fixed (Option 1; interim `get_bundle` endpoint declared
+  moot), tasks.md START-HERE + Distribution ticked, this entry.
+
 ## 2026-07-12 (evening) — Antigravity onboarded live; AHB-18 fixed + deployed
 
 `antigravity-2` (the AGY CLI) had trouble using the hub, so avdia opened a shared-folder

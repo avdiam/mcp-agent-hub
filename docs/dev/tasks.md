@@ -2,7 +2,20 @@
 
 > **This file is the source of truth for what's left to do.** This project travels between two PCs and uses **no local Claude memories** — anything worth preserving lives here (pending work) or in `sessions.md` (history of what's done). Update both in the same change as the work.
 
-> **▶ START HERE (next session).** **2026-07-12 (later): dashboard SSE push shipped (D38) —
+> **▶ START HERE (next session).** **2026-07-12 (evening): PUBLISHED — AHB-10 closed, the
+> last open issue.** The repo is public at **https://github.com/avdiam/mcp-agent-hub** (MIT)
+> with a GitHub Pages docs site at **https://avdiam.github.io/mcp-agent-hub/** (static HTML
+> served from `docs/`; remember: push to `master` auto-redeploys it). Pre-publish pass:
+> 10 stale one-off scripts deleted; README rewritten as a landing page; three new user
+> guides (`docs/setup.md`, `connect-an-agent.md`, `how-it-works.md`) + matching HTML;
+> LICENSE added; the stale flat `hooks.json.template` fixed; secrets/history scan clean.
+> URL broadcast to all peers on the hub. Earlier same day: `antigravity` (agy CLI) fully
+> onboarded live and **AHB-18 fixed + deployed** (`register_agent` skills now optional,
+> non-clobbering re-register) — confirmed working by the reporter. `pytest` **67/67**.
+> **Next candidates:** dogfood the board with the now-4-strong peer roster, remaining
+> workstream-2 UI ideas (send/requeue from the UI, search, richer metrics), stress-test
+> round 2. —
+> Prior: **2026-07-12 (later): dashboard SSE push shipped (D38) —
 > workstream 2's big remaining item.** New `GET /api/events` SSE stream pushes the full
 > `/api/state` snapshot on every state change (in-process `StateNotifier` bumped by the
 > ActivityTracker on every tool call, by mutating REST endpoints + `/api/peek`, and by the
@@ -116,8 +129,13 @@ Build in **phases** (D25): **P1** skeleton + green haiku E2E → **P2** skills/`
   - [x] 2026-06-18: **repo restructure (D27)** — `mcp_hub/` package, `docs/dev/`, `scripts/`, root `README.md`; run via `python run_hub.py` (`uvicorn mcp_hub.hub:app`). Logs consolidated to `logs/hub.log`. Commits `1e7e8da`/`ae99028`. Re-verified live (imports, templates path, restart-from-root, dashboard renders, 403s hold).
   - [x] 2026-06-18: README install fixes (agy), test-agent/test_agent database cleanup, and Step 5.2 Inspector CLI smoke check verified. All v1 post-v1 polish closed. D28 decision log entry written.
 
-## Distribution (future)
-- [ ] **Publish as a public open-source GitHub repo (Option D: Open Source)** — distribute by source so developers verify the code directly; **not** a PyPI package or Docker image. Deferred: extend + stabilize the system first before publishing. *(Operator direction relayed via `antigravity-cli`, 2026-06-18.)* **Cost-of-delay now concrete — see AHB-10:** with no published remote, peers (`nexus`) can't `git fetch` a fix by hash and must be hand-fed file contents over the hub; publishing turns re-vendoring into a `git fetch && checkout`. When it lands, **broadcast the URL** (ties into AHB-1) so peers pin a real origin.
+## Distribution
+- [x] **Publish as a public open-source GitHub repo (Option D: Open Source)** — ✅ **DONE
+  2026-07-12**: **https://github.com/avdiam/mcp-agent-hub** (public, MIT, source
+  distribution — no PyPI/Docker, as decided) + GitHub Pages docs site
+  **https://avdiam.github.io/mcp-agent-hub/** (static HTML from `docs/` on `master` —
+  every push redeploys it). URL broadcast on the hub so peers pin the real origin;
+  re-vendoring is now `git fetch && checkout <hash>` (closes AHB-10).
 
 ## Possible future / v2 (deferred)
 - [ ] **DB connection pooling / shared long-lived connection** (deferred 2026-06-18, Workstream 1). Current `db.py` opens a fresh `aiosqlite.connect()` per call (= new thread + WAL handshake each time); throughput tops out ~76 MCP calls/s (100% success, p95 < 1.5s — already past single-user needs). Revisit **only** on multi-user or real throughput pressure. Options weighed: one shared write-conn + read pool (keeps WAL 1-writer/N-reader concurrency) vs a single `asyncio.Lock`-guarded connection (simplest, serializes writes). Not built now to keep the focus on stabilize, not add surface area.
