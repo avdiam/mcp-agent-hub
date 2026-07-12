@@ -138,6 +138,10 @@ Build in **phases** (D25): **P1** skeleton + green haiku E2E → **P2** skills/`
   re-vendoring is now `git fetch && checkout <hash>` (closes AHB-10).
 
 ## Possible future / v2 (deferred)
+- [ ] **Job board: advisory `claim_window_seconds` on `post_offer` (AHB-19)** — surfaced in
+  the advert / board row / `claim_offer` return so claimants know when the poster intends to
+  select; advisory only, no enforcement. Idea from dogfood run #2 (first contested auction),
+  noted by avdia 2026-07-12. See AHB-19 for the shape.
 - [ ] **DB connection pooling / shared long-lived connection** (deferred 2026-06-18, Workstream 1). Current `db.py` opens a fresh `aiosqlite.connect()` per call (= new thread + WAL handshake each time); throughput tops out ~76 MCP calls/s (100% success, p95 < 1.5s — already past single-user needs). Revisit **only** on multi-user or real throughput pressure. Options weighed: one shared write-conn + read pool (keeps WAL 1-writer/N-reader concurrency) vs a single `asyncio.Lock`-guarded connection (simplest, serializes writes). Not built now to keep the focus on stabilize, not add surface area.
 - [ ] Optional auth (FastMCP `TokenVerifier` / static bearer token) + a **uniform `caller_id`** arg for per-tool identity/ownership enforcement (D23/D11) — keep `127.0.0.1` binding regardless.
 - [ ] Expire parked **`input_required`** tasks whose clarification is never answered, and **cascade-expire** a stalled clarification's whole exchange (v1 excludes `input_request`/`result` from the `MESSAGE_TTL` sweep — D6/Q3/D24).
